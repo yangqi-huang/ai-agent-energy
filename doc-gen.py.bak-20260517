@@ -1,10 +1,8 @@
+from email.mime import text
+
 from shiny import App, Inputs, Outputs, Session, reactive, ui, render
 import requests
 from pathlib import Path
-import json
-import re
-from html import unescape
-from urllib.parse import urlparse
 
 # 文档解析
 from docx import Document
@@ -143,88 +141,7 @@ def server(input: Inputs, output: Outputs, session: Session):
     # ======================================
     # DuckDuckGo 搜索
     # ======================================
-    TRUSTED_SOURCE_DOMAINS = {
-        "eia.gov": "A类：官方能源数据",
-        "iea.org": "A类：国际能源组织",
-        "worldbank.org": "A类：国际组织",
-        "imf.org": "A类：国际组织",
-        "un.org": "A类：国际组织",
-        "opec.org": "B类：行业组织",
-        "jodidata.org": "B类：行业数据",
-        "giignl.org": "B类：LNG行业协会",
-        "igu.org": "B类：天然气行业协会",
-        "reuters.com": "B类：主流新闻",
-        "bloomberg.com": "B类：主流新闻",
-        "spglobal.com": "B类：能源价格/市场数据",
-        "argusmedia.com": "B类：能源价格/市场数据",
-        "lngprime.com": "C类：LNG专业媒体",
-        "offshore-energy.biz": "C类：能源专业媒体",
-        "upstreamonline.com": "C类：油气专业媒体",
-    }
-
-    LOW_CONFIDENCE_HINTS = [
-        "blog",
-        "medium.com",
-        "wikipedia.org",
-        "linkedin.com",
-        "facebook.com",
-        "twitter.com",
-        "x.com",
-    ]
-
-    def source_rating(url: str) -> str:
-        domain = urlparse(url).netloc.lower().replace("www.", "")
-
-        for trusted_domain, rating in TRUSTED_SOURCE_DOMAINS.items():
-            if domain.endswith(trusted_domain):
-                return rating
-
-        if any(hint in domain for hint in LOW_CONFIDENCE_HINTS):
-            return "D类：低置信度线索"
-
-        if domain.endswith(".gov") or ".gov." in domain:
-            return "A类：政府/监管机构"
-
-        if domain.endswith(".org"):
-            return "C类：机构/协会网站"
-
-        return "C类：普通网页/媒体线索"
-
-    def clean_html_text(html: str, max_chars: int = 5000) -> str:
-        html = re.sub(r"(?is)<(script|style|noscript).*?>.*?</\1>", " ", html)
-        html = re.sub(r"(?is)<br\s*/?>", "\n", html)
-        html = re.sub(r"(?is)</(p|div|li|tr|h1|h2|h3)>", "\n", html)
-        text = re.sub(r"(?is)<.*?>", " ", html)
-        text = unescape(text)
-        text = re.sub(r"[ \t]+", " ", text)
-        text = re.sub(r"\n\s*\n+", "\n", text)
-        return text.strip()[:max_chars]
-
-    def fetch_webpage_text(url: str, max_chars: int = 5000) -> str:
-        try:
-            resp = requests.get(
-                url,
-                headers={
-                    "User-Agent": (
-                        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                        "AppleWebKit/537.36 (KHTML, like Gecko) "
-                        "Chrome/124.0 Safari/537.36"
-                    )
-                },
-                timeout=15
-            )
-            resp.raise_for_status()
-
-            content_type = resp.headers.get("Content-Type", "").lower()
-            if "text/html" not in content_type and "text/plain" not in content_type:
-                return "网页正文抓取跳过：非HTML文本页面。"
-
-            return clean_html_text(resp.text, max_chars=max_chars)
-
-        except Exception as e:
-            return f"网页正文抓取失败：{str(e)}"
-
-    def web_search(query: str, max_results=5, fetch_pages=True, max_pages=3):
+    def web_search(query: str, max_results=5):
 
         text = ""
 
@@ -237,30 +154,19 @@ def server(input: Inputs, output: Outputs, session: Session):
                     max_results=max_results
                 )
 
-                for idx, r in enumerate(results, start=1):
+                for r in results:
 
                     title = r.get("title", "")
                     body = r.get("body", "")
                     body = body[:800]
                     href = r.get("href", "")
-                    rating = source_rating(href)
-
-                    page_text = ""
-                    if fetch_pages and idx <= max_pages and href:
-                        page_text = fetch_webpage_text(href)
 
                     text += f"""
-    证据来源等级：
-    {rating}
-
     标题：
     {title}
 
-    搜索摘要：
+    内容：
     {body}
-
-    网页正文摘录：
-    {page_text[:3500]}
 
     链接：
     {href}
@@ -273,66 +179,6 @@ def server(input: Inputs, output: Outputs, session: Session):
             text += f"搜索失败：{str(e)}"
 
         return text
-
-    def parse_research_plan(raw_text: str) -> list[dict]:
-        """
-        解析模型生成的研究计划。优先使用JSON；失败时退化为逐行关键词。
-        """
-
-        try:
-            data = json.loads(raw_text)
-            if isinstance(data, dict):
-                data = data.get("queries", [])
-            if isinstance(data, list):
-                return [
-                    {
-                        "topic": item.get("topic", "综合研究"),
-                        "query": item.get("query", "").strip(),
-                        "source_priority": item.get("source_priority", "官方/行业/新闻"),
-                        "expected_evidence": item.get("expected_evidence", "事实、数据、出处"),
-                    }
-                    for item in data
-                    if isinstance(item, dict) and item.get("query")
-                ]
-        except Exception:
-            pass
-
-        fallback_items = []
-        for line in raw_text.splitlines():
-            line = line.strip("- 　\t\r\n")
-            if line:
-                fallback_items.append({
-                    "topic": "综合研究",
-                    "query": line,
-                    "source_priority": "官方/行业/新闻",
-                    "expected_evidence": "事实、数据、出处",
-                })
-
-        return fallback_items
-
-    INDUSTRY_KNOWLEDGE_FRAMEWORK = """
-    # 油气/LNG/LPG项目判断框架
-
-    ## LNG项目
-    - 核心核验：气源或采购合同、SPA/offtake、DES/FOB条款、接收站/FSRU能力、regas tariff、下游气价机制。
-    - 基础设施：港口水深、码头靠泊能力、储罐规模、气化能力、管网连接、电厂/工业园距离。
-    - 市场消纳：电力、工业、城市燃气、替代燃料价格、现有进口商和接收站竞争格局。
-
-    ## LPG项目
-    - 核心核验：进口依赖度、丙烷/丁烷结构、VLGC接卸能力、库容、周转率、码头资质、分销网络。
-    - 市场消纳：民用瓶装气、商业、工业、化工、PDH需求，价格是否受政府管制。
-    - 风险重点：库存安全、季节性需求、国际CP/FEI/MB价格波动、汇兑和信用风险。
-
-    ## 上游天然气项目
-    - 核心核验：储量分类、气质、CO2/H2S含量、井口压力、开发方案、GPP、管输距离、PSC/矿权/开发许可。
-    - 商业模式：资源开发、气电一体化、管道气销售、LNG小型液化、凝析油/NGL副产品。
-    - 风险重点：地质风险、资源真实性、权属清晰度、政府审批、弃气/火炬气限制、环保要求。
-
-    ## 海外投资通用核验
-    - 合作方：股权结构、最终受益人、核心资产、财务状况、重大交易、诉讼/制裁/负面新闻。
-    - 国家风险：外资准入、能源监管、税务、外汇管制、土地/港口许可、环保、政治与安全。
-    - 投资指标：CAPEX、OPEX、IRR、回收期、敏感性、价格公式、take-or-pay、信用支持。
-    """
 
     # ======================================
     # EIA API：通用数据获取 + 格式化
@@ -615,36 +461,30 @@ def server(input: Inputs, output: Outputs, session: Session):
             # 更新提取文本
             extracted_text_value.set(all_text.strip())
 
-            p.set(30, message="正在生成行业研究计划...")
+            p.set(30, message="正在生成搜索关键词...")
 
             # ======================================
-            # 自动生成行业研究计划
+            # 自动生成搜索关键词
             # ======================================
 
             keyword_prompt = f"""
-            你是专业油气/LPG/LNG海外项目研究员。
+            你是专业项目研究员。
 
             请根据项目材料：
 
-            生成联网研究计划，用于补充项目简报外部证据。
+            生成以下类型的联网搜索计划：
 
-            必须覆盖以下方向：
-            1. 项目所在国能源供需、天然气/LNG/LPG市场
-            2. 项目所在国政策、能源监管、外资准入、税务/外汇风险
-            3. 合作方背景、资产、财务、重大交易/负面新闻
-            4. 下游消纳、潜在买方、港口/管网/电厂/工业园等基础设施
-            5. 同类项目、竞争对手、价格机制、进口依赖度
-            6. 如果项目涉及LNG：补充LNG进口、接收站/FSRU、regas能力、SPA/offtake
-            7. 如果项目涉及LPG：补充LPG进口、码头库容、VLGC接卸、民用/工业/PDH消纳
-            8. 如果项目涉及上游气：补充储量、气质、GPP、管输、PSC/矿权/开发许可
+            1. 行业市场
+            2. 政策法规
+            3. 合作方背景
+            4. 区域经济
+            5. 风险因素
 
+            每类给出2个搜索关键词。
+            
             要求：
-            - 只输出JSON，不要解释
-            - JSON格式为数组
-            - 每个对象包含 topic, query, source_priority, expected_evidence
-            - query尽量使用英文，必要时包含国家名、公司名、项目名、LNG/LPG/gas等关键词
-            - 优先设计能搜到官方、监管、年报、行业协会、主流能源媒体的query
-            - 最多输出12条
+            - 不要解释
+            - 不要编号
 
             项目材料：
             {all_text}
@@ -684,7 +524,7 @@ def server(input: Inputs, output: Outputs, session: Session):
 
             keywords_text = keyword_result["choices"][0]["message"]["content"]
 
-            research_plan = parse_research_plan(keywords_text)
+            keywords = keywords_text.split("\n")
 
             p.set(50, message="正在联网搜索补充信息...")
 
@@ -720,36 +560,22 @@ def server(input: Inputs, output: Outputs, session: Session):
                     title="EIA 天然气 / LNG / LPG 行业数据"
                 )
 
-            for item in research_plan:
+            for kw in keywords:
 
-                kw = item.get("query", "").strip()
+                kw = kw.strip()
 
                 if kw:
 
                     search_result_text += f"""
 
             =========================
-            研究主题：
-            {item.get("topic", "综合研究")}
-
             搜索关键词：
             {kw}
-
-            优先来源：
-            {item.get("source_priority", "官方/行业/新闻")}
-
-            期望证据：
-            {item.get("expected_evidence", "事实、数据、出处")}
             =========================
 
             """
 
-                    result = web_search(
-                        kw,
-                        max_results=5,
-                        fetch_pages=True,
-                        max_pages=3
-                    )
+                    result = web_search(kw)
 
                     search_result_text += result
 
@@ -762,14 +588,6 @@ def server(input: Inputs, output: Outputs, session: Session):
             # 用户上传的项目材料
 
             {all_text}
-
-            # 内置行业知识框架
-
-            {INDUSTRY_KNOWLEDGE_FRAMEWORK}
-
-            # 联网研究计划
-
-            {json.dumps(research_plan, ensure_ascii=False, indent=2)}
 
             # 联网搜索补充资料
 
@@ -794,9 +612,6 @@ def server(input: Inputs, output: Outputs, session: Session):
             - 优先采用用户原始材料
             - 搜索结果仅作为补充参考
             - EIA 数据属于高可信行业数据
-            - A类/B类来源可作为重要判断依据；C类来源只作为辅助线索；D类来源仅提示，不可单独支撑结论
-            - 关键数据必须尽量标注来源名称、年份/日期、链接
-            - 对合作方、储量、气量、价格、CAPEX、IRR、税率、许可证、制裁/诉讼等高风险信息，要区分“材料披露”“外部佐证”“待核实”
             - 若搜索结果与原文冲突，请明确标注“待核实”
             - 不要编造不存在的数据
             - 请保持专业投研风格
@@ -853,19 +668,8 @@ def server(input: Inputs, output: Outputs, session: Session):
 
             最后必须输出：
 
-            【外部证据摘要】：
-            - 已获得较强佐证的信息
-            - 仅获得线索但仍需核实的信息
-            - 尚未找到可靠来源的信息
-
             【人工审慎把关】判断：
-
             【思考逻辑】：
-
-            输出要求：
-            - 不要笼统写“很多数据搜索不到”，必须具体列出哪些字段缺证据
-            - 对每个待核实项说明建议下一步核验路径，例如索要文件、查监管官网、查年报、访谈合作方、聘请法律/税务/技术顾问
-            - 凡引用外部资料，尽量在句末附来源名称或链接
             """
 
             try:
