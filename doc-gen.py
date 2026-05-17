@@ -26,6 +26,12 @@ app_ui = ui.page_sidebar(
             placeholder="输入你的 API Key"
         ),
 
+        ui.input_password(
+            "eia_api_key",
+            "EIA API Key",
+            placeholder="输入你的 API Key"
+        ),
+
         ui.hr(),
 
         ui.h5("📁 上传文件"),
@@ -178,6 +184,70 @@ def server(input: Inputs, output: Outputs, session: Session):
     # EIA API：通用数据获取 + 格式化
     # ======================================
 
+    COUNTRY_TO_EIA_CODE = {
+    "United States": "USA",
+    "China": "CHN",
+    "Indonesia": "IDN",
+    "Malaysia": "MYS",
+    "Singapore": "SGP",
+    "Thailand": "THA",
+    "Vietnam": "VNM",
+    "Philippines": "PHL",
+    "India": "IND",
+    "Australia": "AUS",
+    "Qatar": "QAT",
+    "United Arab Emirates": "ARE",
+    "Saudi Arabia": "SAU",
+    "Oman": "OMN",
+    "Canada": "CAN",
+    "Mexico": "MEX",
+    "Brazil": "BRA",
+    "Argentina": "ARG",
+    "Chile": "CHL",
+    "Peru": "PER",
+    }
+
+
+    def extract_project_country(api_key: str, all_text: str) -> str:
+        prompt = f"""
+        请从以下项目材料中识别项目所在国家。
+
+        要求：
+        - 只输出英文国家名
+        - 如果无法判断，输出 UNKNOWN
+        - 不要解释
+
+        项目材料：
+        {all_text[:6000]}
+        """
+
+        resp = requests.post(
+            url="https://api.deepseek.com/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": "deepseek-v4-flash",
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": "你是项目所在地识别助手"
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                "temperature": 0
+            },
+            timeout=60
+        )
+
+        resp.raise_for_status()
+
+        return resp.json()["choices"][0]["message"]["content"].strip()
+
     def format_eia_data(result: dict, title: str = "EIA 行业数据", max_rows: int = 10) -> str:
         """
         将不同 EIA API 返回结果统一格式化成适合喂给 LLM 的文本。
@@ -231,15 +301,34 @@ def server(input: Inputs, output: Outputs, session: Session):
         except Exception as e:
             return f"{title}\n\nEIA 数据格式化失败：{str(e)}\n"
 
-
-    def get_eia_data(eia_url: str, title: str = "EIA 行业数据") -> str:
-        """
-        请求 EIA API，并返回格式化后的文本。
-        """
+    def get_eia_international_data(
+        eia_api_key: str,
+        country_code: str | None = None,
+        title: str = "EIA International 能源数据"
+        ) -> str:
 
         try:
+            url = "https://api.eia.gov/v2/international/data/"
+
+            params = {
+                "api_key": eia_api_key,
+                "frequency": "annual",
+                "data[0]": "value",
+                "start": "2015",
+                "end": "2026",
+                "sort[0][column]": "period",
+                "sort[0][direction]": "desc",
+                "offset": 0,
+                "length": 50
+            }
+
+            # 注意：这个 facet 名需要以 EIA metadata 为准
+            if country_code:
+                params["facets[countryRegionId][]"] = country_code
+
             resp = requests.get(
-                eia_url,
+                url,
+                params=params,
                 timeout=30
             )
 
@@ -249,8 +338,8 @@ def server(input: Inputs, output: Outputs, session: Session):
 
             return format_eia_data(
                 result=result,
-                title=title,
-                max_rows=10
+                title=f"{title} - {country_code or '未筛选国家'}",
+                max_rows=20
             )
 
         except Exception as e:
@@ -326,6 +415,7 @@ def server(input: Inputs, output: Outputs, session: Session):
     def process_all():
 
         api_key = input.api_key().strip()
+        eia_api_key = input.eia_api_key().strip()
         files = input.upload()
 
         # 校验
@@ -446,20 +536,28 @@ def server(input: Inputs, output: Outputs, session: Session):
 
             eia_result = ""
 
-            if (
+            if eia_api_key and (
                 "lng" in all_text.lower()
                 or "lpg" in all_text.lower()
                 or "天然气" in all_text
                 or "液化天然气" in all_text
+                or "油气" in all_text
             ):
+                p.set(55, message="正在识别项目国家...")
+
+                project_country = extract_project_country(
+                    api_key=api_key,
+                    all_text=all_text
+                )
+
+                country_code = COUNTRY_TO_EIA_CODE.get(project_country)
 
                 p.set(60, message="正在获取 EIA 行业数据...")
 
-                eia_url = "https://api.eia.gov/v2/international/data/?frequency=annual&data[0]=value&start=1949&end=2026&sort[0][column]=period&sort[0][direction]=desc&offset=0&length=5000"
-
-                eia_result = get_eia_data(
-                    eia_url=eia_url,
-                    title="EIA 天然气 / LNG 行业数据"
+                eia_result = get_eia_international_data(
+                    eia_api_key=eia_api_key,
+                    country_code=country_code,
+                    title="EIA 天然气 / LNG / LPG 行业数据"
                 )
 
             for kw in keywords:
