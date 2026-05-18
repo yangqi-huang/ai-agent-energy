@@ -77,12 +77,6 @@ app_ui = ui.page_sidebar(
             class_="btn-success w-100 mt-2"
         ),
 
-        ui.input_action_button(
-            "clear_agent",
-            "清空",
-            class_="btn-outline-secondary w-100 mt-2"
-        ),
-
         ui.hr(),
 
         ui.output_ui("uploaded_files_preview"),
@@ -323,24 +317,6 @@ app_ui = ui.page_sidebar(
             document.execCommand("insertText", false, text);
             syncRichEditor();
         }
-        function clearAgentClientState() {
-            const editor = document.getElementById("rich_editor");
-            if (editor) editor.innerHTML = "";
-
-            const upload = document.getElementById("upload");
-            if (upload) {
-                upload.value = "";
-                upload.dispatchEvent(new Event("change", {bubbles: true}));
-            }
-
-            document.querySelectorAll("#rich_editor .selected-cell").forEach(el => el.classList.remove("selected-cell"));
-            activeTableCell = null;
-
-            if (window.Shiny) {
-                Shiny.setInputValue("editor_html", "", {priority: "event"});
-                Shiny.setInputValue("editor_text", "", {priority: "event"});
-            }
-        }
         document.addEventListener("DOMContentLoaded", function() {
             document.addEventListener("input", function(event) {
                 if (event.target && event.target.id === "rich_editor") syncRichEditor();
@@ -351,11 +327,6 @@ app_ui = ui.page_sidebar(
             document.addEventListener("click", function(event) {
                 const cell = event.target.closest && event.target.closest("#rich_editor td, #rich_editor th");
                 if (cell) selectTableCell(cell);
-            });
-            document.addEventListener("click", function(event) {
-                if (event.target && event.target.id === "clear_agent") {
-                    setTimeout(clearAgentClientState, 0);
-                }
             });
             document.addEventListener("paste", pastePlainText);
             if (window.Shiny) {
@@ -1418,17 +1389,6 @@ def server(input: Inputs, output: Outputs, session: Session):
     # ======================================
     # 点击按钮执行
     # ======================================
-
-    @reactive.Effect
-    @reactive.event(input.clear_agent)
-    def clear_agent_state():
-        extracted_text_value.set("")
-        ai_output_result_value.set("等待AI处理...")
-
-        ui.notification_show(
-            "已清空当前内容，可上传新的项目资料。",
-            type="message"
-        )
 
     @reactive.Effect
     @reactive.event(input.run_agent)

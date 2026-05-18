@@ -3,11 +3,9 @@ import requests
 from pathlib import Path
 import json
 import re
-import time
 from datetime import datetime
-from html.parser import HTMLParser
 from io import BytesIO
-from html import escape, unescape
+from html import unescape
 from urllib.parse import urlparse
 
 # 文档解析
@@ -19,7 +17,6 @@ from docx.oxml.ns import qn
 from docx.shared import Inches, Pt, RGBColor
 from PyPDF2 import PdfReader
 from pptx import Presentation
-from markdown_it import MarkdownIt
 
 # 搜索
 from duckduckgo_search import DDGS
@@ -77,12 +74,6 @@ app_ui = ui.page_sidebar(
             class_="btn-success w-100 mt-2"
         ),
 
-        ui.input_action_button(
-            "clear_agent",
-            "清空",
-            class_="btn-outline-secondary w-100 mt-2"
-        ),
-
         ui.hr(),
 
         ui.output_ui("uploaded_files_preview"),
@@ -92,289 +83,63 @@ app_ui = ui.page_sidebar(
 
     # 页面主体
     ui.tags.head(
-        ui.tags.title("项目简报信息排版AI Agent"),
-        ui.tags.style("""
-        .word-toolbar {
-            position: sticky;
-            top: 0;
-            z-index: 20;
-            display: flex;
-            gap: 6px;
-            align-items: center;
-            flex-wrap: wrap;
-            padding: 8px;
-            border: 1px solid #d0d7de;
-            border-bottom: 0;
-            border-radius: 8px 8px 0 0;
-            background: #f6f8fa;
-        }
-        .word-toolbar button, .word-toolbar select {
-            height: 30px;
-            border: 1px solid #c9d1d9;
-            border-radius: 6px;
-            background: #fff;
-            color: #24292f;
-            font-size: 13px;
-            padding: 0 9px;
-            cursor: pointer;
-        }
-        .word-toolbar button {
-            min-width: 32px;
-            font-weight: 600;
-        }
-        .word-toolbar button:hover, .word-toolbar select:hover {
-            background: #eef2f6;
-        }
-        .toolbar-group {
-            display: inline-flex;
-            gap: 4px;
-            align-items: center;
-            padding-right: 8px;
-            margin-right: 2px;
-            border-right: 1px solid #d8dee4;
-        }
-        .toolbar-group:last-child {
-            border-right: 0;
-        }
-        .word-editor {
-            min-height: 760px;
-            overflow-y: visible;
-            padding: 34px 42px;
-            border: 1px solid #d0d7de;
-            background: #fff;
-            color: #1f2328;
-            font-family: Arial, "Microsoft YaHei", sans-serif;
-            font-size: 15px;
-            line-height: 1.55;
-        }
-        .word-editor {
-            border-radius: 0 0 8px 8px;
-            outline: none;
-        }
-        .word-editor:focus {
-            box-shadow: inset 0 0 0 2px #2f81f7;
-        }
-        .word-editor h1 {
-            font-size: 24px;
-            color: #17365d;
-            margin: 0 0 18px;
-            text-align: center;
-        }
-        .word-editor h2 {
-            font-size: 19px;
-            color: #17365d;
-            margin: 24px 0 10px;
-            padding-bottom: 4px;
-            border-bottom: 1px solid #d8dee4;
-        }
-        .word-editor h3 {
-            font-size: 16px;
-            color: #1f4e79;
-            margin: 18px 0 8px;
-        }
-        .word-editor p {
-            margin: 0 0 9px;
-        }
-        .word-editor ul, .word-editor ol {
-            margin: 6px 0 12px 24px;
-            padding-left: 20px;
-        }
-        .word-editor table {
-            width: 100%;
-            border-collapse: collapse;
-            margin: 12px 0 16px;
-            table-layout: fixed;
-            font-size: 13px;
-        }
-        .word-editor th, .word-editor td {
-            border: 1px solid #d0d7de;
-            padding: 8px 10px;
-            vertical-align: top;
-            word-break: break-word;
-        }
-        .word-editor th {
-            background: #eaf2f8;
-            color: #17365d;
-            font-weight: 700;
-        }
-        .word-editor td.selected-cell, .word-editor th.selected-cell {
-            outline: 2px solid #2f81f7;
-            outline-offset: -2px;
-            background: #f0f6ff;
-        }
-        .word-editor blockquote {
-            margin: 12px 0;
-            padding: 10px 14px;
-            border-left: 4px solid #6e7781;
-            background: #f6f8fa;
-        }
-        """),
-        ui.tags.script("""
-        function syncRichEditor() {
-            const editor = document.getElementById("rich_editor");
-            if (!editor || !window.Shiny) return;
-            Shiny.setInputValue("editor_html", editor.innerHTML, {priority: "event"});
-            Shiny.setInputValue("editor_text", editor.innerText || "", {priority: "event"});
-        }
-        let activeTableCell = null;
-        function execRichCommand(command, value = null) {
-            const editor = document.getElementById("rich_editor");
-            if (!editor) return;
-            editor.focus();
-            document.execCommand(command, false, value);
-            syncRichEditor();
-        }
-        function toggleHeading(tagName) {
-            const editor = document.getElementById("rich_editor");
-            if (!editor) return;
-            editor.focus();
-            const selection = window.getSelection();
-            let node = selection && selection.rangeCount ? selection.anchorNode : null;
-            if (node && node.nodeType === Node.TEXT_NODE) node = node.parentElement;
-            const block = node && node.closest ? node.closest("h1,h2,h3,p,div,li") : null;
-            const currentTag = block ? block.tagName.toUpperCase() : "";
-            const nextTag = currentTag === tagName.toUpperCase() ? "P" : tagName.toUpperCase();
-            document.execCommand("formatBlock", false, `<${nextTag.toLowerCase()}>`);
-            syncRichEditor();
-        }
-        function selectTableCell(cell) {
-            document.querySelectorAll("#rich_editor .selected-cell").forEach(el => el.classList.remove("selected-cell"));
-            activeTableCell = cell;
-            if (cell) cell.classList.add("selected-cell");
-        }
-        function getTableSize() {
-            const rows = Math.max(1, Math.min(8, parseInt(document.getElementById("table_rows")?.value || "3", 10)));
-            const cols = Math.max(1, Math.min(8, parseInt(document.getElementById("table_cols")?.value || "4", 10)));
-            return {rows, cols};
-        }
-        function insertRichTable() {
-            const {rows, cols} = getTableSize();
-            let html = "<table><thead><tr>";
-            for (let c = 0; c < cols; c++) html += "<th>表头</th>";
-            html += "</tr></thead><tbody>";
-            for (let r = 0; r < rows - 1; r++) {
-                html += "<tr>";
-                for (let c = 0; c < cols; c++) html += "<td>内容</td>";
-                html += "</tr>";
-            }
-            html += "</tbody></table><p><br></p>";
-            execRichCommand("insertHTML", html);
-        }
-        function getActiveTableInfo() {
-            if (!activeTableCell || !document.body.contains(activeTableCell)) return null;
-            const table = activeTableCell.closest("table");
-            const row = activeTableCell.closest("tr");
-            if (!table || !row) return null;
-            return {
-                table,
-                row,
-                cell: activeTableCell,
-                rowIndex: Array.from(table.rows).indexOf(row),
-                cellIndex: Array.from(row.cells).indexOf(activeTableCell)
-            };
-        }
-        function insertTableRow(position) {
-            const info = getActiveTableInfo();
-            if (!info) return;
-            const insertIndex = position === "before" ? info.rowIndex : info.rowIndex + 1;
-            const newRow = info.table.insertRow(insertIndex);
-            const colCount = Math.max(...Array.from(info.table.rows).map(row => row.cells.length));
-            for (let c = 0; c < colCount; c++) {
-                const cell = newRow.insertCell(c);
-                cell.innerHTML = "<br>";
-            }
-            syncRichEditor();
-        }
-        function insertTableColumn(position) {
-            const info = getActiveTableInfo();
-            if (!info) return;
-            const insertIndex = position === "before" ? info.cellIndex : info.cellIndex + 1;
-            Array.from(info.table.rows).forEach((row, rowIndex) => {
-                const refCell = row.cells[Math.min(insertIndex, row.cells.length - 1)];
-                const tagName = rowIndex === 0 && row.parentElement.tagName.toLowerCase() === "thead" ? "th" : (refCell?.tagName || "td").toLowerCase();
-                const newCell = document.createElement(tagName);
-                newCell.innerHTML = rowIndex === 0 ? "表头" : "<br>";
-                if (insertIndex >= row.cells.length) row.appendChild(newCell);
-                else row.insertBefore(newCell, row.cells[insertIndex]);
-            });
-            syncRichEditor();
-        }
-        function deleteSelectedTableCell() {
-            const info = getActiveTableInfo();
-            if (!info) return;
-            const table = info.table;
-            const row = info.row;
-
-            if (row.cells.length > 1) {
-                row.deleteCell(info.cellIndex);
-            } else if (table.rows.length > 1) {
-                table.deleteRow(info.rowIndex);
-            } else {
-                table.remove();
-            }
-
-            activeTableCell = null;
-            syncRichEditor();
-        }
-        function pastePlainText(event) {
-            if (!event.target || event.target.id !== "rich_editor") return;
-            event.preventDefault();
-            const text = (event.clipboardData || window.clipboardData).getData("text/plain");
-            document.execCommand("insertText", false, text);
-            syncRichEditor();
-        }
-        function clearAgentClientState() {
-            const editor = document.getElementById("rich_editor");
-            if (editor) editor.innerHTML = "";
-
-            const upload = document.getElementById("upload");
-            if (upload) {
-                upload.value = "";
-                upload.dispatchEvent(new Event("change", {bubbles: true}));
-            }
-
-            document.querySelectorAll("#rich_editor .selected-cell").forEach(el => el.classList.remove("selected-cell"));
-            activeTableCell = null;
-
-            if (window.Shiny) {
-                Shiny.setInputValue("editor_html", "", {priority: "event"});
-                Shiny.setInputValue("editor_text", "", {priority: "event"});
-            }
-        }
-        document.addEventListener("DOMContentLoaded", function() {
-            document.addEventListener("input", function(event) {
-                if (event.target && event.target.id === "rich_editor") syncRichEditor();
-            });
-            document.addEventListener("focusout", function(event) {
-                if (event.target && event.target.id === "rich_editor") syncRichEditor();
-            });
-            document.addEventListener("click", function(event) {
-                const cell = event.target.closest && event.target.closest("#rich_editor td, #rich_editor th");
-                if (cell) selectTableCell(cell);
-            });
-            document.addEventListener("click", function(event) {
-                if (event.target && event.target.id === "clear_agent") {
-                    setTimeout(clearAgentClientState, 0);
-                }
-            });
-            document.addEventListener("paste", pastePlainText);
-            if (window.Shiny) {
-                Shiny.addCustomMessageHandler("set_editor_html", function(message) {
-                    const editor = document.getElementById("rich_editor");
-                    if (!editor) return;
-                    editor.innerHTML = message.html || "";
-                    syncRichEditor();
-                });
-            }
-        });
-        """)
+        ui.tags.title("项目简报信息排版AI Agent")
     ),
 
     ui.card(
 
         ui.h4("✅ AI 结构化输出"),
 
-        ui.output_ui("rich_editor_panel"),
+        ui.layout_columns(
+
+            # ======================================
+            # 左侧：可编辑 Markdown
+            # ======================================
+
+            ui.card(
+
+                ui.h5("✏️ 编辑区"),
+
+                ui.input_text_area(
+                    "editable_ai_result",
+                    label=None,
+                    value="",
+                    width="100%",
+                    height="700px"
+                ),
+
+                full_screen=True
+
+            ),
+
+            # ======================================
+            # 右侧：Markdown 实时预览
+            # ======================================
+
+            ui.card(
+
+                ui.h5("📖 实时预览"),
+
+                ui.div(
+
+                    ui.output_ui("markdown_preview"),
+
+                    style="""
+                    height:700px;
+                    overflow-y:auto;
+                    padding:15px;
+                    border:1px solid #ddd;
+                    border-radius:8px;
+                    background:#fff;
+                    """
+                ),
+
+                full_screen=True
+            ),
+
+            col_widths=[6, 6]
+
+        ),
 
         height="100%"
     ),
@@ -392,67 +157,9 @@ def server(input: Inputs, output: Outputs, session: Session):
     extracted_text_value = reactive.Value("")
     ai_output_result_value = reactive.Value("等待AI处理...")
 
-    def input_value(name: str, default=""):
-        try:
-            value = getattr(input, name)()
-            return value if value is not None else default
-        except Exception:
-            return default
-
     # ======================================
     # DuckDuckGo 搜索
     # ======================================
-
-    def deepseek_chat_completion(
-        api_key: str,
-        model: str,
-        messages: list[dict],
-        temperature: float = 0.2,
-        timeout: int = 120,
-        retries: int = 3,
-    ) -> dict:
-        """
-        DeepSeek API 有时会因网络或上游chunked传输中断而提前断开。
-        这里统一做超时、重试和明确报错，避免Shiny界面直接抛堆栈。
-        """
-
-        last_error = None
-
-        for attempt in range(1, retries + 1):
-            try:
-                resp = requests.post(
-                    url="https://api.deepseek.com/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {api_key}",
-                        "Content-Type": "application/json"
-                    },
-                    json={
-                        "model": model,
-                        "messages": messages,
-                        "temperature": temperature
-                    },
-                    timeout=timeout
-                )
-
-                resp.raise_for_status()
-                return resp.json()
-
-            except (
-                requests.exceptions.ChunkedEncodingError,
-                requests.exceptions.ConnectionError,
-                requests.exceptions.Timeout,
-                requests.exceptions.HTTPError,
-            ) as e:
-                last_error = e
-                if attempt < retries:
-                    time.sleep(1.5 * attempt)
-                    continue
-                break
-
-        raise RuntimeError(
-            f"DeepSeek API 请求失败，已重试 {retries} 次：{last_error}"
-        )
-
     TRUSTED_SOURCE_DOMAINS = {
         "eia.gov": "A类：官方能源数据",
         "iea.org": "A类：国际能源组织",
@@ -865,25 +572,32 @@ def server(input: Inputs, output: Outputs, session: Session):
         {all_text[:6000]}
         """
 
-        result = deepseek_chat_completion(
-            api_key=api_key,
-            model="deepseek-v4-flash",
-            messages=[
-                {
-                    "role": "system",
-                    "content": "你是项目所在地识别助手"
-                },
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ],
-            temperature=0,
-            timeout=60,
-            retries=3
+        resp = requests.post(
+            url="https://api.deepseek.com/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": "deepseek-v4-flash",
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": "你是项目所在地识别助手"
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                "temperature": 0
+            },
+            timeout=60
         )
 
-        return result["choices"][0]["message"]["content"].strip()
+        resp.raise_for_status()
+
+        return resp.json()["choices"][0]["message"]["content"].strip()
 
     def format_eia_data(result: dict, title: str = "EIA 行业数据", max_rows: int = 10) -> str:
         """
@@ -986,13 +700,6 @@ def server(input: Inputs, output: Outputs, session: Session):
     # Markdown 转 Word
     # ======================================
 
-    def markdown_to_editor_html(markdown_text: str) -> str:
-        if not markdown_text:
-            return ""
-
-        md = MarkdownIt("gfm-like", {"html": False, "linkify": True})
-        return md.render(markdown_text)
-
     def set_cell_text(cell, text: str, bold: bool = False):
         cell.text = ""
         paragraph = cell.paragraphs[0]
@@ -1079,33 +786,6 @@ def server(input: Inputs, output: Outputs, session: Session):
             for col_idx in range(col_count):
                 text = row[col_idx] if col_idx < len(row) else ""
                 set_cell_text(cells[col_idx], text)
-
-        doc.add_paragraph()
-
-    def add_html_table(doc: Document, rows: list[list[dict]]):
-        if not rows:
-            return
-
-        col_count = max(len(row) for row in rows)
-        if col_count == 0:
-            return
-
-        table = doc.add_table(rows=1, cols=col_count)
-        table.alignment = WD_TABLE_ALIGNMENT.CENTER
-        table.autofit = True
-        set_table_borders(table)
-
-        for col_idx in range(col_count):
-            cell_data = rows[0][col_idx] if col_idx < len(rows[0]) else {"text": "", "header": True}
-            cell = table.rows[0].cells[col_idx]
-            set_cell_text(cell, cell_data.get("text", ""), bold=True)
-            shade_cell(cell, "EAF2F8")
-
-        for row in rows[1:]:
-            cells = table.add_row().cells
-            for col_idx in range(col_count):
-                cell_data = row[col_idx] if col_idx < len(row) else {"text": "", "header": False}
-                set_cell_text(cells[col_idx], cell_data.get("text", ""))
 
         doc.add_paragraph()
 
@@ -1214,142 +894,6 @@ def server(input: Inputs, output: Outputs, session: Session):
         doc.save(buffer)
         return buffer.getvalue()
 
-    class RichHtmlToDocxParser(HTMLParser):
-        def __init__(self, doc: Document):
-            super().__init__()
-            self.doc = doc
-            self.current_paragraph = None
-            self.bold = False
-            self.italic = False
-            self.underline = False
-            self.list_stack = []
-            self.in_table = False
-            self.table_rows = []
-            self.current_row = None
-            self.current_cell = None
-
-        def paragraph_alignment(self, attrs) -> WD_ALIGN_PARAGRAPH | None:
-            attr_map = {key.lower(): value for key, value in attrs}
-            style = attr_map.get("style", "").lower()
-            align = attr_map.get("align", "").lower()
-
-            if "text-align: center" in style or align == "center":
-                return WD_ALIGN_PARAGRAPH.CENTER
-            if "text-align: right" in style or align == "right":
-                return WD_ALIGN_PARAGRAPH.RIGHT
-            if "text-align: left" in style or align == "left":
-                return WD_ALIGN_PARAGRAPH.LEFT
-            return None
-
-        def apply_alignment(self, paragraph, attrs):
-            alignment = self.paragraph_alignment(attrs)
-            if alignment is not None:
-                paragraph.alignment = alignment
-
-        def handle_starttag(self, tag, attrs):
-            tag = tag.lower()
-
-            if tag in ["strong", "b"]:
-                self.bold = True
-            elif tag in ["em", "i"]:
-                self.italic = True
-            elif tag == "u":
-                self.underline = True
-            elif tag in ["h1", "h2", "h3"]:
-                level = int(tag[1])
-                self.current_paragraph = self.doc.add_heading("", level=level)
-                self.apply_alignment(self.current_paragraph, attrs)
-            elif tag in ["p", "div"]:
-                if not self.in_table:
-                    self.current_paragraph = self.doc.add_paragraph()
-                    self.apply_alignment(self.current_paragraph, attrs)
-            elif tag == "br":
-                if self.current_paragraph is not None:
-                    self.current_paragraph.add_run().add_break()
-            elif tag == "ul":
-                self.list_stack.append("ul")
-            elif tag == "ol":
-                self.list_stack.append("ol")
-            elif tag == "li":
-                style = "List Number" if self.list_stack and self.list_stack[-1] == "ol" else "List Bullet"
-                self.current_paragraph = self.doc.add_paragraph(style=style)
-                self.apply_alignment(self.current_paragraph, attrs)
-            elif tag == "table":
-                self.in_table = True
-                self.table_rows = []
-            elif tag == "tr":
-                self.current_row = []
-            elif tag in ["th", "td"]:
-                self.current_cell = {
-                    "text": "",
-                    "header": tag == "th"
-                }
-
-        def handle_endtag(self, tag):
-            tag = tag.lower()
-
-            if tag in ["strong", "b"]:
-                self.bold = False
-            elif tag in ["em", "i"]:
-                self.italic = False
-            elif tag == "u":
-                self.underline = False
-            elif tag in ["h1", "h2", "h3", "p", "div", "li"]:
-                self.current_paragraph = None
-            elif tag in ["ul", "ol"]:
-                if self.list_stack:
-                    self.list_stack.pop()
-            elif tag in ["th", "td"]:
-                if self.current_row is not None and self.current_cell is not None:
-                    self.current_cell["text"] = re.sub(r"\s+", " ", self.current_cell["text"]).strip()
-                    self.current_row.append(self.current_cell)
-                self.current_cell = None
-            elif tag == "tr":
-                if self.current_row is not None:
-                    self.table_rows.append(self.current_row)
-                self.current_row = None
-            elif tag == "table":
-                add_html_table(self.doc, self.table_rows)
-                self.in_table = False
-                self.table_rows = []
-
-        def handle_data(self, data):
-            if not data:
-                return
-
-            if self.in_table and self.current_cell is not None:
-                self.current_cell["text"] += data
-                return
-
-            text = data
-            if not text.strip():
-                return
-
-            if self.current_paragraph is None:
-                self.current_paragraph = self.doc.add_paragraph()
-
-            run = self.current_paragraph.add_run(text)
-            run.bold = self.bold
-            run.italic = self.italic
-            run.underline = self.underline
-            run.font.name = "Arial"
-            run._element.rPr.rFonts.set(qn("w:eastAsia"), "Microsoft YaHei")
-
-    def html_to_docx_bytes(html_text: str) -> bytes:
-        doc = Document()
-        style_word_document(doc)
-
-        doc.core_properties.title = "项目简报"
-        doc.core_properties.author = "广东九丰能源项目简报信息排版AI Agent"
-        doc.core_properties.created = datetime.now()
-
-        parser = RichHtmlToDocxParser(doc)
-        parser.feed(html_text or "<h1>项目简报</h1><p>暂无AI输出内容。</p>")
-
-        buffer = BytesIO()
-        doc.save(buffer)
-        return buffer.getvalue()
-
     def word_filename():
         date_str = datetime.now().strftime("%Y%m%d")
         return f"项目简报_{date_str}.docx"
@@ -1418,17 +962,6 @@ def server(input: Inputs, output: Outputs, session: Session):
     # ======================================
     # 点击按钮执行
     # ======================================
-
-    @reactive.Effect
-    @reactive.event(input.clear_agent)
-    def clear_agent_state():
-        extracted_text_value.set("")
-        ai_output_result_value.set("等待AI处理...")
-
-        ui.notification_show(
-            "已清空当前内容，可上传新的项目资料。",
-            type="message"
-        )
 
     @reactive.Effect
     @reactive.event(input.run_agent)
@@ -1517,33 +1050,37 @@ def server(input: Inputs, output: Outputs, session: Session):
             {all_text}
             """
 
-            try:
-                keyword_result = deepseek_chat_completion(
-                    api_key=api_key,
-                    model="deepseek-v4-flash",
-                    messages=[
+            keyword_resp = requests.post(
+
+                url="https://api.deepseek.com/chat/completions",
+
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json"
+                },
+
+                json={
+
+                    "model": "deepseek-v4-flash",
+
+                    "messages": [
+
                         {
                             "role": "system",
                             "content": "你是专业项目关键词提取助手"
                         },
+
                         {
                             "role": "user",
                             "content": keyword_prompt
                         }
                     ],
-                    temperature=0.1,
-                    timeout=90,
-                    retries=3
-                )
-            except Exception as e:
-                ai_output_result_value.set(
-                    f"生成研究计划失败：{str(e)}"
-                )
-                ui.notification_show(
-                    f"❌ 生成研究计划失败：{str(e)}",
-                    type="error"
-                )
-                return
+
+                    "temperature": 0.1
+                }
+            )
+
+            keyword_result = keyword_resp.json()
 
             keywords_text = keyword_result["choices"][0]["message"]["content"]
 
@@ -1757,28 +1294,51 @@ def server(input: Inputs, output: Outputs, session: Session):
 
             try:
 
-                result = deepseek_chat_completion(
-                    api_key=api_key,
-                    model="deepseek-v4-pro",
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": system_prompt
-                        },
-                        {
-                            "role": "user",
-                            "content": final_user_prompt
-                        }
-                    ],
-                    temperature=0.2,
-                    timeout=180,
-                    retries=3
+                resp = requests.post(
+
+                    url="https://api.deepseek.com/chat/completions",
+
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json"
+                    },
+
+                    json={
+
+                        "model": "deepseek-v4-pro",
+
+                        "messages": [
+
+                            {
+                                "role": "system",
+                                "content": system_prompt
+                            },
+
+                            {
+                                "role": "user",
+                                "content": final_user_prompt
+                            }
+                        ],
+
+                        "temperature": 0.2
+                    },
+
+                    timeout=120
                 )
+
+                resp.raise_for_status()
+
+                result = resp.json()
 
                 ai_output = result["choices"][0]["message"]["content"]
 
                 # 更新 AI 输出
                 ai_output_result_value.set(ai_output)
+
+                ui.update_text_area(
+                "editable_ai_result",
+                value=ai_output
+                )
 
                 p.set(100, message="完成")
 
@@ -1804,73 +1364,11 @@ def server(input: Inputs, output: Outputs, session: Session):
 
     @output
     @render.ui
-    def rich_editor_panel():
-        content = ai_output_result_value()
-        html_content = "" if content == "等待AI处理..." else markdown_to_editor_html(content)
-
-        return ui.div(
-            ui.div(
-                ui.div(
-                    ui.tags.button("↶", type="button", title="撤销", onclick="execRichCommand('undo')"),
-                    ui.tags.button("B", type="button", title="粗体", onclick="execRichCommand('bold')"),
-                    ui.tags.button("I", type="button", title="斜体", onclick="execRichCommand('italic')"),
-                    ui.tags.button("U", type="button", title="下划线", onclick="execRichCommand('underline')"),
-                    class_="toolbar-group"
-                ),
-                ui.div(
-                    ui.tags.button("H1", type="button", title="一级标题/正文切换", onclick="toggleHeading('H1')"),
-                    ui.tags.button("H2", type="button", title="二级标题/正文切换", onclick="toggleHeading('H2')"),
-                    ui.tags.button("H3", type="button", title="三级标题/正文切换", onclick="toggleHeading('H3')"),
-                    ui.tags.button("•", type="button", title="项目符号", onclick="execRichCommand('insertUnorderedList')"),
-                    ui.tags.button("1.", type="button", title="编号列表", onclick="execRichCommand('insertOrderedList')"),
-                    class_="toolbar-group"
-                ),
-                ui.div(
-                    ui.tags.button("左", type="button", title="左对齐", onclick="execRichCommand('justifyLeft')"),
-                    ui.tags.button("中", type="button", title="居中", onclick="execRichCommand('justifyCenter')"),
-                    ui.tags.button("右", type="button", title="右对齐", onclick="execRichCommand('justifyRight')"),
-                    class_="toolbar-group"
-                ),
-                ui.div(
-                    ui.tags.select(
-                        *[ui.tags.option(f"{n}行", value=str(n), selected=(n == 3)) for n in range(1, 9)],
-                        id="table_rows",
-                        title="表格行数"
-                    ),
-                    ui.tags.select(
-                        *[ui.tags.option(f"{n}列", value=str(n), selected=(n == 4)) for n in range(1, 9)],
-                        id="table_cols",
-                        title="表格列数"
-                    ),
-                    ui.tags.button("插入表格", type="button", title="按所选行列插入表格", onclick="insertRichTable()"),
-                    class_="toolbar-group"
-                ),
-                ui.div(
-                    ui.tags.button("上方行", type="button", title="在当前单元格上方插入行", onclick="insertTableRow('before')"),
-                    ui.tags.button("下方行", type="button", title="在当前单元格下方插入行", onclick="insertTableRow('after')"),
-                    ui.tags.button("左侧列", type="button", title="在当前单元格左侧插入列", onclick="insertTableColumn('before')"),
-                    ui.tags.button("右侧列", type="button", title="在当前单元格右侧插入列", onclick="insertTableColumn('after')"),
-                    ui.tags.button("删除单元格", type="button", title="删除当前选中的表格单元格", onclick="deleteSelectedTableCell()"),
-                    class_="toolbar-group"
-                ),
-                class_="word-toolbar"
-            ),
-            ui.div(
-                ui.HTML(html_content),
-                id="rich_editor",
-                class_="word-editor",
-                contenteditable="true"
-            ),
-            ui.tags.script("setTimeout(syncRichEditor, 0);")
-        )
-
-    @output
-    @render.ui
     def markdown_preview():
 
-        content = input_value("editor_html") or markdown_to_editor_html(ai_output_result_value())
+        content = input.editable_ai_result()
 
-        return ui.HTML(content)
+        return ui.markdown(content)
 
     @output
     @render.ui
@@ -1901,15 +1399,12 @@ def server(input: Inputs, output: Outputs, session: Session):
     @output
     @render.download(filename=word_filename)
     def download_word():
-        content = input_value("editor_html")
-
-        if not content:
-            content = markdown_to_editor_html(ai_output_result_value())
+        content = input.editable_ai_result() or ai_output_result_value()
 
         if not content or content == "等待AI处理...":
-            content = "<h1>项目简报</h1><p>暂无AI输出内容，请先点击“开始解析+结构化”。</p>"
+            content = "# 项目简报\n\n暂无AI输出内容，请先点击“开始解析+结构化”。"
 
-        yield html_to_docx_bytes(content)
+        yield markdown_to_docx_bytes(content)
 
     @output
     @render.text

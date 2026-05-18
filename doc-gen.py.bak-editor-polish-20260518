@@ -77,12 +77,6 @@ app_ui = ui.page_sidebar(
             class_="btn-success w-100 mt-2"
         ),
 
-        ui.input_action_button(
-            "clear_agent",
-            "清空",
-            class_="btn-outline-secondary w-100 mt-2"
-        ),
-
         ui.hr(),
 
         ui.output_ui("uploaded_files_preview"),
@@ -95,9 +89,6 @@ app_ui = ui.page_sidebar(
         ui.tags.title("项目简报信息排版AI Agent"),
         ui.tags.style("""
         .word-toolbar {
-            position: sticky;
-            top: 0;
-            z-index: 20;
             display: flex;
             gap: 6px;
             align-items: center;
@@ -138,7 +129,8 @@ app_ui = ui.page_sidebar(
         }
         .word-editor {
             min-height: 760px;
-            overflow-y: visible;
+            max-height: calc(100vh - 220px);
+            overflow-y: auto;
             padding: 34px 42px;
             border: 1px solid #d0d7de;
             background: #fff;
@@ -224,19 +216,6 @@ app_ui = ui.page_sidebar(
             document.execCommand(command, false, value);
             syncRichEditor();
         }
-        function toggleHeading(tagName) {
-            const editor = document.getElementById("rich_editor");
-            if (!editor) return;
-            editor.focus();
-            const selection = window.getSelection();
-            let node = selection && selection.rangeCount ? selection.anchorNode : null;
-            if (node && node.nodeType === Node.TEXT_NODE) node = node.parentElement;
-            const block = node && node.closest ? node.closest("h1,h2,h3,p,div,li") : null;
-            const currentTag = block ? block.tagName.toUpperCase() : "";
-            const nextTag = currentTag === tagName.toUpperCase() ? "P" : tagName.toUpperCase();
-            document.execCommand("formatBlock", false, `<${nextTag.toLowerCase()}>`);
-            syncRichEditor();
-        }
         function selectTableCell(cell) {
             document.querySelectorAll("#rich_editor .selected-cell").forEach(el => el.classList.remove("selected-cell"));
             activeTableCell = cell;
@@ -299,47 +278,12 @@ app_ui = ui.page_sidebar(
             });
             syncRichEditor();
         }
-        function deleteSelectedTableCell() {
-            const info = getActiveTableInfo();
-            if (!info) return;
-            const table = info.table;
-            const row = info.row;
-
-            if (row.cells.length > 1) {
-                row.deleteCell(info.cellIndex);
-            } else if (table.rows.length > 1) {
-                table.deleteRow(info.rowIndex);
-            } else {
-                table.remove();
-            }
-
-            activeTableCell = null;
-            syncRichEditor();
-        }
         function pastePlainText(event) {
             if (!event.target || event.target.id !== "rich_editor") return;
             event.preventDefault();
             const text = (event.clipboardData || window.clipboardData).getData("text/plain");
             document.execCommand("insertText", false, text);
             syncRichEditor();
-        }
-        function clearAgentClientState() {
-            const editor = document.getElementById("rich_editor");
-            if (editor) editor.innerHTML = "";
-
-            const upload = document.getElementById("upload");
-            if (upload) {
-                upload.value = "";
-                upload.dispatchEvent(new Event("change", {bubbles: true}));
-            }
-
-            document.querySelectorAll("#rich_editor .selected-cell").forEach(el => el.classList.remove("selected-cell"));
-            activeTableCell = null;
-
-            if (window.Shiny) {
-                Shiny.setInputValue("editor_html", "", {priority: "event"});
-                Shiny.setInputValue("editor_text", "", {priority: "event"});
-            }
         }
         document.addEventListener("DOMContentLoaded", function() {
             document.addEventListener("input", function(event) {
@@ -351,11 +295,6 @@ app_ui = ui.page_sidebar(
             document.addEventListener("click", function(event) {
                 const cell = event.target.closest && event.target.closest("#rich_editor td, #rich_editor th");
                 if (cell) selectTableCell(cell);
-            });
-            document.addEventListener("click", function(event) {
-                if (event.target && event.target.id === "clear_agent") {
-                    setTimeout(clearAgentClientState, 0);
-                }
             });
             document.addEventListener("paste", pastePlainText);
             if (window.Shiny) {
@@ -374,7 +313,11 @@ app_ui = ui.page_sidebar(
 
         ui.h4("✅ AI 结构化输出"),
 
-        ui.output_ui("rich_editor_panel"),
+        ui.card(
+            ui.h5("✏️ 编辑区"),
+            ui.output_ui("rich_editor_panel"),
+            full_screen=True
+        ),
 
         height="100%"
     ),
@@ -1420,17 +1363,6 @@ def server(input: Inputs, output: Outputs, session: Session):
     # ======================================
 
     @reactive.Effect
-    @reactive.event(input.clear_agent)
-    def clear_agent_state():
-        extracted_text_value.set("")
-        ai_output_result_value.set("等待AI处理...")
-
-        ui.notification_show(
-            "已清空当前内容，可上传新的项目资料。",
-            type="message"
-        )
-
-    @reactive.Effect
     @reactive.event(input.run_agent)
     def process_all():
 
@@ -1818,9 +1750,9 @@ def server(input: Inputs, output: Outputs, session: Session):
                     class_="toolbar-group"
                 ),
                 ui.div(
-                    ui.tags.button("H1", type="button", title="一级标题/正文切换", onclick="toggleHeading('H1')"),
-                    ui.tags.button("H2", type="button", title="二级标题/正文切换", onclick="toggleHeading('H2')"),
-                    ui.tags.button("H3", type="button", title="三级标题/正文切换", onclick="toggleHeading('H3')"),
+                    ui.tags.button("H1", type="button", title="一级标题", onclick="execRichCommand('formatBlock', '<h1>')"),
+                    ui.tags.button("H2", type="button", title="二级标题", onclick="execRichCommand('formatBlock', '<h2>')"),
+                    ui.tags.button("H3", type="button", title="三级标题", onclick="execRichCommand('formatBlock', '<h3>')"),
                     ui.tags.button("•", type="button", title="项目符号", onclick="execRichCommand('insertUnorderedList')"),
                     ui.tags.button("1.", type="button", title="编号列表", onclick="execRichCommand('insertOrderedList')"),
                     class_="toolbar-group"
@@ -1850,7 +1782,6 @@ def server(input: Inputs, output: Outputs, session: Session):
                     ui.tags.button("下方行", type="button", title="在当前单元格下方插入行", onclick="insertTableRow('after')"),
                     ui.tags.button("左侧列", type="button", title="在当前单元格左侧插入列", onclick="insertTableColumn('before')"),
                     ui.tags.button("右侧列", type="button", title="在当前单元格右侧插入列", onclick="insertTableColumn('after')"),
-                    ui.tags.button("删除单元格", type="button", title="删除当前选中的表格单元格", onclick="deleteSelectedTableCell()"),
                     class_="toolbar-group"
                 ),
                 class_="word-toolbar"
