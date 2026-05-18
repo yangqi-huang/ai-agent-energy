@@ -48,7 +48,20 @@ app_ui = ui.page_sidebar(
 
         ui.h5("📁 上传文件"),
 
-        ui.output_ui("upload_panel"),
+        ui.input_file(
+            "upload",
+            "上传 PPT / PDF / Word / 图片",
+            multiple=True,
+            accept=[
+                ".ppt",
+                ".pptx",
+                ".pdf",
+                ".docx",
+                ".png",
+                ".jpg",
+                ".jpeg"
+            ]
+        ),
 
         ui.hr(),
 
@@ -96,12 +109,15 @@ app_ui = ui.page_sidebar(
             background: #f6f8fa;
             box-shadow: 0 6px 12px rgba(31, 35, 40, 0.10);
         }
-        .editor-shell {
-            height: calc(100vh - 185px);
-            min-height: 560px;
-            overflow-y: auto;
-            border-radius: 8px;
+        .word-toolbar::before {
+            content: "";
+            position: absolute;
+            left: -1px;
+            right: -1px;
+            top: -80px;
+            height: 80px;
             background: #fff;
+            pointer-events: none;
         }
         .word-toolbar button, .word-toolbar select {
             height: 30px;
@@ -132,11 +148,10 @@ app_ui = ui.page_sidebar(
             border-right: 0;
         }
         .word-editor {
-            min-height: calc(100vh - 265px);
+            min-height: 760px;
             overflow-y: visible;
             padding: 42px 42px 34px;
             border: 1px solid #d0d7de;
-            border-top: 0;
             background: #fff;
             color: #1f2328;
             font-family: Arial, "Microsoft YaHei", sans-serif;
@@ -323,6 +338,24 @@ app_ui = ui.page_sidebar(
             const editor = document.getElementById("rich_editor");
             if (editor) editor.innerHTML = "";
 
+            const upload = document.getElementById("upload");
+            if (upload) {
+                const clone = upload.cloneNode(true);
+                clone.value = "";
+                upload.replaceWith(clone);
+                clone.dispatchEvent(new Event("change", {bubbles: true}));
+            }
+
+            document.querySelectorAll(
+                "#upload_progress, .progress, .shiny-file-input-progress, .shiny-input-container .progress"
+            ).forEach(el => el.remove());
+
+            document.querySelectorAll(
+                "[id^='upload-'], [data-input-id='upload'] .shiny-file-input-progress"
+            ).forEach(el => {
+                if (el.id !== "upload") el.remove();
+            });
+
             document.querySelectorAll("#rich_editor .selected-cell").forEach(el => el.classList.remove("selected-cell"));
             activeTableCell = null;
 
@@ -367,7 +400,7 @@ app_ui = ui.page_sidebar(
 
         ui.output_ui("rich_editor_panel"),
 
-        height="calc(100vh - 95px)"
+        height="100%"
     ),
 
     fillable=True
@@ -1862,8 +1895,7 @@ def server(input: Inputs, output: Outputs, session: Session):
                 class_="word-editor",
                 contenteditable="true"
             ),
-            ui.tags.script("setTimeout(syncRichEditor, 0);"),
-            class_="editor-shell"
+            ui.tags.script("setTimeout(syncRichEditor, 0);")
         )
 
     @output
@@ -1873,29 +1905,6 @@ def server(input: Inputs, output: Outputs, session: Session):
         content = input_value("editor_html") or markdown_to_editor_html(ai_output_result_value())
 
         return ui.HTML(content)
-
-    @output
-    @render.ui
-    def upload_panel():
-        version = clear_version_value()
-
-        return ui.div(
-            ui.input_file(
-                "upload",
-                "上传 PPT / PDF / Word / 图片",
-                multiple=True,
-                accept=[
-                    ".ppt",
-                    ".pptx",
-                    ".pdf",
-                    ".docx",
-                    ".png",
-                    ".jpg",
-                    ".jpeg"
-                ]
-            ),
-            id=f"upload_panel_{version}"
-        )
 
     @output
     @render.ui

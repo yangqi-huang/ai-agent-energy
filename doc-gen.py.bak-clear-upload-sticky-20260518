@@ -48,7 +48,20 @@ app_ui = ui.page_sidebar(
 
         ui.h5("📁 上传文件"),
 
-        ui.output_ui("upload_panel"),
+        ui.input_file(
+            "upload",
+            "上传 PPT / PDF / Word / 图片",
+            multiple=True,
+            accept=[
+                ".ppt",
+                ".pptx",
+                ".pdf",
+                ".docx",
+                ".png",
+                ".jpg",
+                ".jpeg"
+            ]
+        ),
 
         ui.hr(),
 
@@ -84,24 +97,16 @@ app_ui = ui.page_sidebar(
         .word-toolbar {
             position: sticky;
             top: 0;
-            z-index: 1000;
+            z-index: 20;
             display: flex;
             gap: 6px;
             align-items: center;
             flex-wrap: wrap;
-            padding: 10px 8px 8px;
+            padding: 8px;
             border: 1px solid #d0d7de;
             border-bottom: 0;
             border-radius: 8px 8px 0 0;
             background: #f6f8fa;
-            box-shadow: 0 6px 12px rgba(31, 35, 40, 0.10);
-        }
-        .editor-shell {
-            height: calc(100vh - 185px);
-            min-height: 560px;
-            overflow-y: auto;
-            border-radius: 8px;
-            background: #fff;
         }
         .word-toolbar button, .word-toolbar select {
             height: 30px;
@@ -132,11 +137,10 @@ app_ui = ui.page_sidebar(
             border-right: 0;
         }
         .word-editor {
-            min-height: calc(100vh - 265px);
+            min-height: 760px;
             overflow-y: visible;
-            padding: 42px 42px 34px;
+            padding: 34px 42px;
             border: 1px solid #d0d7de;
-            border-top: 0;
             background: #fff;
             color: #1f2328;
             font-family: Arial, "Microsoft YaHei", sans-serif;
@@ -323,11 +327,16 @@ app_ui = ui.page_sidebar(
             const editor = document.getElementById("rich_editor");
             if (editor) editor.innerHTML = "";
 
+            const upload = document.getElementById("upload");
+            if (upload) {
+                upload.value = "";
+                upload.dispatchEvent(new Event("change", {bubbles: true}));
+            }
+
             document.querySelectorAll("#rich_editor .selected-cell").forEach(el => el.classList.remove("selected-cell"));
             activeTableCell = null;
 
             if (window.Shiny) {
-                Shiny.setInputValue("upload", null, {priority: "event"});
                 Shiny.setInputValue("editor_html", "", {priority: "event"});
                 Shiny.setInputValue("editor_text", "", {priority: "event"});
             }
@@ -367,7 +376,7 @@ app_ui = ui.page_sidebar(
 
         ui.output_ui("rich_editor_panel"),
 
-        height="calc(100vh - 95px)"
+        height="100%"
     ),
 
     fillable=True
@@ -382,8 +391,6 @@ def server(input: Inputs, output: Outputs, session: Session):
     # Reactive 状态
     extracted_text_value = reactive.Value("")
     ai_output_result_value = reactive.Value("等待AI处理...")
-    clear_version_value = reactive.Value(0)
-    upload_cleared_value = reactive.Value(False)
 
     def input_value(name: str, default=""):
         try:
@@ -1417,8 +1424,6 @@ def server(input: Inputs, output: Outputs, session: Session):
     def clear_agent_state():
         extracted_text_value.set("")
         ai_output_result_value.set("等待AI处理...")
-        clear_version_value.set(clear_version_value() + 1)
-        upload_cleared_value.set(True)
 
         ui.notification_show(
             "已清空当前内容，可上传新的项目资料。",
@@ -1426,18 +1431,12 @@ def server(input: Inputs, output: Outputs, session: Session):
         )
 
     @reactive.Effect
-    @reactive.event(input.upload)
-    def mark_upload_active():
-        if input.upload():
-            upload_cleared_value.set(False)
-
-    @reactive.Effect
     @reactive.event(input.run_agent)
     def process_all():
 
         api_key = input.api_key().strip()
         eia_api_key = input.eia_api_key().strip()
-        files = None if upload_cleared_value() else input.upload()
+        files = input.upload()
 
         # 校验
         if not api_key:
@@ -1862,8 +1861,7 @@ def server(input: Inputs, output: Outputs, session: Session):
                 class_="word-editor",
                 contenteditable="true"
             ),
-            ui.tags.script("setTimeout(syncRichEditor, 0);"),
-            class_="editor-shell"
+            ui.tags.script("setTimeout(syncRichEditor, 0);")
         )
 
     @output
@@ -1876,34 +1874,10 @@ def server(input: Inputs, output: Outputs, session: Session):
 
     @output
     @render.ui
-    def upload_panel():
-        version = clear_version_value()
-
-        return ui.div(
-            ui.input_file(
-                "upload",
-                "上传 PPT / PDF / Word / 图片",
-                multiple=True,
-                accept=[
-                    ".ppt",
-                    ".pptx",
-                    ".pdf",
-                    ".docx",
-                    ".png",
-                    ".jpg",
-                    ".jpeg"
-                ]
-            ),
-            id=f"upload_panel_{version}"
-        )
-
-    @output
-    @render.ui
     def uploaded_files_preview():
-        clear_version_value()
         files = input.upload()
 
-        if upload_cleared_value() or not files:
+        if not files:
             return ui.div(
                 ui.tags.small("尚未上传文件。可一次选择多个 PPT / PDF / Word / 图片。"),
                 class_="text-muted"
