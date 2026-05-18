@@ -1172,7 +1172,7 @@ def server(input: Inputs, output: Outputs, session: Session):
 
         if not files:
             return ui.div(
-                ui.small("尚未上传文件。可一次选择多个 PPT / PDF / Word / 图片。"),
+                ui.tags.small("尚未上传文件。可一次选择多个 PPT / PDF / Word / 图片。"),
                 class_="text-muted"
             )
 
@@ -1187,7 +1187,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         return ui.div(
             ui.h6(f"已上传 {len(files)} 个文件"),
             ui.tags.ul(*file_items),
-            ui.small("Agent 会按文件名分段解析并合并进入同一份项目简报。"),
+            ui.tags.small("Agent 会按文件名分段解析并合并进入同一份项目简报。"),
             class_="text-muted"
         )
 
