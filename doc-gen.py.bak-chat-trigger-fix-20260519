@@ -416,7 +416,7 @@ app_ui = ui.page_sidebar(
                 if (event.target && event.target.id === "chat_question" && event.key === "Enter" && !event.shiftKey) {
                     event.preventDefault();
                     const sendButton = document.getElementById("ask_chat");
-                    if (sendButton && !sendButton.disabled) sendButton.click();
+                    if (sendButton) sendButton.click();
                 }
             });
             document.addEventListener("paste", pastePlainText);
@@ -481,8 +481,6 @@ def server(input: Inputs, output: Outputs, session: Session):
     clear_version_value = reactive.Value(0)
     upload_cleared_value = reactive.Value(False)
     chat_messages_value = reactive.Value([])
-    chat_busy_value = reactive.Value(False)
-    last_chat_question_value = reactive.Value("")
 
     def input_value(name: str, default=""):
         try:
@@ -1936,8 +1934,6 @@ def server(input: Inputs, output: Outputs, session: Session):
         extracted_text_value.set("")
         ai_output_result_value.set("等待AI处理...")
         chat_messages_value.set([])
-        chat_busy_value.set(False)
-        last_chat_question_value.set("")
         clear_version_value.set(clear_version_value() + 1)
         upload_cleared_value.set(True)
 
@@ -2360,18 +2356,8 @@ def server(input: Inputs, output: Outputs, session: Session):
     @reactive.Effect
     @reactive.event(input.ask_chat)
     def answer_project_question():
-        if chat_busy_value():
-            ui.notification_show("上一条追问仍在处理中，请稍候。", type="warning")
-            return
-
-        with reactive.isolate():
-            api_key = input.api_key().strip()
-            question = (input.chat_question() or "").strip()
-            current_brief = brief_until_risk_section(
-                input_value("editor_text") or ai_output_result_value()
-            )
-            source_material = extracted_text_value()
-            history = chat_messages_value()
+        api_key = input.api_key().strip()
+        question = (input.chat_question() or "").strip()
 
         if not api_key:
             ui.notification_show("请输入 DeepSeek API Key", type="error")
@@ -2381,20 +2367,17 @@ def server(input: Inputs, output: Outputs, session: Session):
             ui.notification_show("请输入要追问的问题", type="warning")
             return
 
-        if question == last_chat_question_value():
-            ui.notification_show("这条问题刚刚已经发送过了，请稍候或修改问题后再发。", type="warning")
-            return
-
-        chat_busy_value.set(True)
-        last_chat_question_value.set(question)
-        ui.update_action_button("ask_chat", label="发送中...")
+        current_brief = brief_until_risk_section(
+            input_value("editor_text") or ai_output_result_value()
+        )
+        source_material = extracted_text_value()
+        history = chat_messages_value()
 
         user_message = {
             "role": "user",
             "content": question
         }
         chat_messages_value.set(history + [user_message])
-        ui.update_text_area("chat_question", value="")
 
         history_for_prompt = "\n\n".join(
             f"{'用户' if item.get('role') == 'user' else '助手'}：{item.get('content', '')}"
@@ -2451,8 +2434,7 @@ def server(input: Inputs, output: Outputs, session: Session):
             "content": answer
         }])
 
-        chat_busy_value.set(False)
-        ui.update_action_button("ask_chat", label="发送")
+        ui.update_text_area("chat_question", value="")
 
     # ======================================
     # 输出渲染

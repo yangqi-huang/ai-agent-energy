@@ -25,6 +25,7 @@ PyPDF2==3.0.1
 python-docx==1.2.0
 python-multipart==0.0.28
 python-pptx==1.0.2
+pytesseract==0.3.13
 questionary==2.1.1
 requests==2.34.1
 setuptools==82.0.1

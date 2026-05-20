@@ -3,9 +3,6 @@ import requests
 from pathlib import Path
 import json
 import re
-import shutil
-import subprocess
-import tempfile
 import time
 from datetime import datetime
 from html.parser import HTMLParser
@@ -20,9 +17,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Inches, Pt, RGBColor
-from PIL import Image, ImageEnhance, ImageOps
 from PyPDF2 import PdfReader
-from pptx.enum.shapes import MSO_SHAPE_TYPE
 from pptx import Presentation
 from markdown_it import MarkdownIt
 
@@ -209,65 +204,6 @@ app_ui = ui.page_sidebar(
             border-left: 4px solid #6e7781;
             background: #f6f8fa;
         }
-        .chat-shell {
-            height: calc(100vh - 185px);
-            min-height: 560px;
-            display: flex;
-            flex-direction: column;
-            border: 1px solid #d0d7de;
-            border-radius: 8px;
-            background: #fff;
-            overflow: hidden;
-        }
-        .chat-history {
-            flex: 1;
-            overflow-y: auto;
-            padding: 16px;
-            background: #f6f8fa;
-        }
-        .chat-message {
-            max-width: 86%;
-            margin-bottom: 12px;
-            padding: 10px 12px;
-            border-radius: 16px;
-            font-size: 14px;
-            line-height: 1.55;
-            border: 1px solid #d8dee4;
-            word-break: break-word;
-        }
-        .chat-message.user {
-            margin-left: auto;
-            background: #dbeafe;
-            border-color: #93c5fd;
-            border-bottom-right-radius: 4px;
-        }
-        .chat-message.assistant {
-            margin-right: auto;
-            background: #fff;
-            border-bottom-left-radius: 4px;
-        }
-        .chat-role {
-            font-size: 12px;
-            font-weight: 700;
-            color: #57606a;
-            margin-bottom: 4px;
-        }
-        .chat-input {
-            padding: 10px;
-            border-top: 1px solid #d0d7de;
-            background: #fff;
-            flex-shrink: 0;
-        }
-        .chat-input textarea {
-            resize: vertical;
-        }
-        .chat-card {
-            height: calc(100vh - 95px);
-        }
-        .chat-card .card-body {
-            display: flex;
-            flex-direction: column;
-        }
         """),
         ui.tags.script("""
         function syncRichEditor() {
@@ -412,13 +348,6 @@ app_ui = ui.page_sidebar(
                     setTimeout(clearAgentClientState, 0);
                 }
             });
-            document.addEventListener("keydown", function(event) {
-                if (event.target && event.target.id === "chat_question" && event.key === "Enter" && !event.shiftKey) {
-                    event.preventDefault();
-                    const sendButton = document.getElementById("ask_chat");
-                    if (sendButton && !sendButton.disabled) sendButton.click();
-                }
-            });
             document.addEventListener("paste", pastePlainText);
             if (window.Shiny) {
                 Shiny.addCustomMessageHandler("set_editor_html", function(message) {
@@ -432,38 +361,13 @@ app_ui = ui.page_sidebar(
         """)
     ),
 
-    ui.layout_columns(
-        ui.card(
-            ui.h4("✅ AI 结构化输出"),
-            ui.output_ui("rich_editor_panel"),
-            height="calc(100vh - 95px)",
-            full_screen=True
-        ),
-        ui.card(
-            ui.h4("💬 项目追问"),
-            ui.div(
-                ui.output_ui("chat_history"),
-                ui.div(
-                    ui.input_text_area(
-                        "chat_question",
-                        label=None,
-                        placeholder="基于左侧简报继续提问，按 Enter 发送，Shift+Enter 换行。",
-                        width="100%",
-                        height="96px"
-                    ),
-                    ui.input_action_button(
-                        "ask_chat",
-                        "发送",
-                        class_="btn-primary w-100 mt-2"
-                    ),
-                    class_="chat-input"
-                ),
-                class_="chat-shell"
-            ),
-            class_="chat-card",
-            full_screen=True
-        ),
-        col_widths=[7, 5]
+    ui.card(
+
+        ui.h4("✅ AI 结构化输出"),
+
+        ui.output_ui("rich_editor_panel"),
+
+        height="calc(100vh - 95px)"
     ),
 
     fillable=True
@@ -480,9 +384,6 @@ def server(input: Inputs, output: Outputs, session: Session):
     ai_output_result_value = reactive.Value("等待AI处理...")
     clear_version_value = reactive.Value(0)
     upload_cleared_value = reactive.Value(False)
-    chat_messages_value = reactive.Value([])
-    chat_busy_value = reactive.Value(False)
-    last_chat_question_value = reactive.Value("")
 
     def input_value(name: str, default=""):
         try:
@@ -490,35 +391,6 @@ def server(input: Inputs, output: Outputs, session: Session):
             return value if value is not None else default
         except Exception:
             return default
-
-    def brief_until_risk_section(brief_text: str) -> str:
-        """
-        项目追问只使用简报中“风险识别”及以前的内容。
-        模型生成的标题可能是带编号/不带编号/Markdown标题，这里用后续模块标题做截断。
-        """
-
-        if not brief_text:
-            return ""
-
-        cut_patterns = [
-            r"\n\s*(?:#+\s*)?(?:7[\.、]\s*)?外围证据验证\b",
-            r"\n\s*(?:#+\s*)?(?:8[\.、]\s*)?NDA前追问清单\b",
-            r"\n\s*(?:#+\s*)?(?:9[\.、]\s*)?项目评分模型\b",
-            r"\n\s*(?:#+\s*)?(?:10[\.、]\s*)?结论与建议下一步计划\b",
-            r"\n\s*(?:#+\s*)?【外部证据摘要】",
-            r"\n\s*(?:#+\s*)?【人工审慎把关】",
-        ]
-
-        cut_positions = []
-        for pattern in cut_patterns:
-            match = re.search(pattern, brief_text)
-            if match:
-                cut_positions.append(match.start())
-
-        if cut_positions:
-            return brief_text[:min(cut_positions)].strip()
-
-        return brief_text.strip()
 
     # ======================================
     # DuckDuckGo 搜索
@@ -1075,41 +947,28 @@ def server(input: Inputs, output: Outputs, session: Session):
     """
 
     PROJECT_SCORING_FRAMEWORK = """
-    # NDA前项目初筛评分模型
+    # 项目评分模型（总分100分）
 
-    本模型用于签署NDA前的早期项目判断。早期项目信息少、公开信息少是正常情况，
-    因此评分不能把“未知/未披露/未搜到”简单等同于“差”。
-
-    ## A. 机会吸引力评分（总分100分）
-    评估项目如果属实，是否值得继续接触。未知项采用“中性待核验”处理。
-
-    1. 资源/资产吸引力（15分）：资源、气源、资产类型、区位、技术可行性、项目稀缺性。
-    2. 权属与推进路径可行性（15分）：矿权/牌照/土地/码头/特许经营权、审批路径、外资准入。未知不直接低分，发现明确障碍才扣分。
-    3. 市场消纳与价格逻辑（15分）：下游需求、offtake可能性、需求增长、替代燃料、价格机制。
-    4. 基础设施匹配度（10分）：港口、码头、储罐、管网、GPP、FSRU/LNG接收站、电厂/工业园连接。
-    5. 合作方初步匹配度（15分）：合作方是否真实存在、行业相关性、资产/资源/政府关系/项目推进能力。缺财务报表不直接低分。
-    6. 商业模式潜力（10分）：盈利来源、CAPEX/OPEX合理性、可能的IRR/回收期、贸易或基础设施协同。
-    7. 国家/政策/税务/外汇环境（10分）：政治稳定、能源监管、税务、外汇、制裁、汇兑；未知项标待核验。
+    1. 资源/资产确定性（15分）：储量、气源、气质、资产边界、技术可行性、数据来源可靠性。
+    2. 权属与合规清晰度（15分）：矿权/牌照/土地/码头/特许经营权、审批状态、外资准入、法律合规。
+    3. 市场消纳与价格机制（15分）：下游客户、offtake、需求增长、替代燃料、价格公式、付款信用。
+    4. 基础设施成熟度（10分）：港口、码头、储罐、管网、GPP、FSRU/LNG接收站、电厂/工业园连接。
+    5. 合作方能力与信用（15分）：股权结构、财务实力、运营经验、核心资产、历史交易、负面新闻。
+    6. 财务回报与商业模式（10分）：CAPEX/OPEX、IRR、回收期、现金流、盈利来源、敏感性。
+    7. 国家/政策/税务/外汇风险（10分）：政治稳定、监管变化、税负、外汇管制、制裁、汇兑。
     8. 与九丰业务协同（10分）：LNG/LPG/天然气供应链协同、贸易协同、下游渠道、区域布局价值。
 
-    ## B. 信息充分度评级（不计入机会吸引力总分）
-    单独输出信息充分度：高 / 中 / 低 / 极低。
-    - 高：核心主体、资产、权属、市场、财务均有材料或外部佐证。
-    - 中：主体和外围逻辑可验证，但关键商业/权属文件待NDA后核验。
-    - 低：仅有基础teaser或少量线索，外围逻辑部分成立。
-    - 极低：主体、位置、权属、市场均缺少可验证线索。
+    ## 评分建议
+    - 80-100：建议推进；但仍需完成关键尽调。
+    - 65-79：谨慎推进；需先解决核心待核实项。
+    - 50-64：暂缓推进；除非补充材料显著改善判断。
+    - 0-49：不建议推进；风险或信息缺口过大。
 
-    ## C. 初筛建议
-    - 建议进入NDA：机会吸引力较高，且无明显红旗；即使信息充分度低，也可进入NDA索取核心材料。
-    - 补充非敏感材料后再NDA：机会可能存在，但主体/位置/权属/市场至少一项过于模糊。
-    - 谨慎接触：外围逻辑弱，或合作方/政策/基础设施存在疑点。
-    - 暂缓/不建议：发现明确负面证据、明显矛盾、制裁诉讼重大风险、权属路径明显不可行。
-
-    ## D. 评分约束
-    - “未搜索到公开信息”本身不等于低分，应影响“信息充分度”和“待核验清单”，不直接大幅拉低机会吸引力。
-    - 只有出现明确负面证据、明显逻辑矛盾、关键主体不存在、权属路径明显不可行时，才对机会吸引力显著扣分。
-    - 对未知项使用“中性待核验”措辞，并说明需要哪些NDA前/后材料。
-    - 必须同时输出：机会吸引力得分、信息充分度评级、评分置信度、初筛建议。
+    ## 评分约束
+    - 缺少外部证据时，不得给对应维度高分。
+    - 仅有合作方自述、无第三方或官方佐证时，单项一般不超过该维度60%。
+    - 发现权属不清、重大制裁、许可证缺失、核心资源真实性无法验证时，必须显著扣分。
+    - 必须说明每项得分依据、扣分原因和下一步提分所需材料。
     """
 
     INDUSTRY_KNOWLEDGE_FRAMEWORK = """
@@ -1723,154 +1582,6 @@ def server(input: Inputs, output: Outputs, session: Session):
     # 文件解析
     # ======================================
 
-    def preprocess_ocr_image(image_bytes: bytes) -> BytesIO:
-        image = Image.open(BytesIO(image_bytes))
-        image = ImageOps.exif_transpose(image)
-        image = image.convert("L")
-
-        width, height = image.size
-        max_side = max(width, height)
-        if max_side < 1800:
-            scale = min(3, 1800 / max_side)
-            image = image.resize(
-                (int(width * scale), int(height * scale)),
-                Image.Resampling.LANCZOS
-            )
-
-        image = ImageEnhance.Contrast(image).enhance(1.8)
-        image = ImageOps.autocontrast(image)
-
-        output = BytesIO()
-        image.save(output, format="PNG")
-        output.seek(0)
-        return output
-
-    def ocr_image_bytes(image_bytes: bytes, lang: str = "chi_sim+eng") -> tuple[str, str | None]:
-        """
-        OCR优先级：
-        1. pytesseract Python包
-        2. tesseract 命令行
-
-        返回：(识别文本, 错误信息)。如果没有OCR引擎，错误信息会说明安装方式。
-        """
-
-        try:
-            processed = preprocess_ocr_image(image_bytes)
-        except Exception as e:
-            return "", f"图片预处理失败：{str(e)}"
-
-        try:
-            import pytesseract
-
-            text = pytesseract.image_to_string(
-                Image.open(processed),
-                lang=lang,
-                config="--psm 6"
-            )
-            return text.strip(), None
-        except Exception as py_error:
-            tesseract_cmd = shutil.which("tesseract")
-            if not tesseract_cmd:
-                return "", (
-                    "OCR不可用：未检测到 pytesseract 或 tesseract。"
-                    "如需识别PPT/图片里的文字，请安装：brew install tesseract tesseract-lang；"
-                    "并在虚拟环境中安装 pytesseract。"
-                )
-
-            with tempfile.NamedTemporaryFile(suffix=".png") as image_file:
-                image_file.write(processed.getvalue())
-                image_file.flush()
-
-                try:
-                    completed = subprocess.run(
-                        [
-                            tesseract_cmd,
-                            image_file.name,
-                            "stdout",
-                            "-l",
-                            lang,
-                            "--psm",
-                            "6",
-                        ],
-                        check=True,
-                        capture_output=True,
-                        text=True,
-                        timeout=45
-                    )
-                    return completed.stdout.strip(), None
-                except Exception as cli_error:
-                    return "", f"OCR失败：pytesseract错误：{py_error}；tesseract命令错误：{cli_error}"
-
-    def extract_docx_tables(doc: Document) -> str:
-        text = ""
-        for table_idx, table in enumerate(doc.tables, start=1):
-            text += f"\n【Word表格 {table_idx}】\n"
-            for row in table.rows:
-                cells = [cell.text.strip().replace("\n", " ") for cell in row.cells]
-                if any(cells):
-                    text += " | ".join(cells) + "\n"
-        return text
-
-    def extract_ppt_table_text(shape) -> str:
-        if not getattr(shape, "has_table", False):
-            return ""
-
-        text = ""
-        table = shape.table
-        for row in table.rows:
-            cells = [cell.text.strip().replace("\n", " ") for cell in row.cells]
-            if any(cells):
-                text += " | ".join(cells) + "\n"
-        return text
-
-    def extract_ppt_notes(slide) -> str:
-        try:
-            notes_text = slide.notes_slide.notes_text_frame.text
-            return notes_text.strip()
-        except Exception:
-            return ""
-
-    def extract_ppt_image_ocr(shape, slide_idx: int, image_idx: int) -> str:
-        try:
-            image = shape.image
-            text, error = ocr_image_bytes(image.blob)
-            if text:
-                return f"\n【PPT第{slide_idx}页 图片{image_idx} OCR】\n{text}\n"
-            if error:
-                return f"\n【PPT第{slide_idx}页 图片{image_idx}】检测到图片，但{error}\n"
-            return ""
-        except Exception as e:
-            return f"\n【PPT第{slide_idx}页 图片{image_idx}】图片OCR读取失败：{str(e)}\n"
-
-    def parse_pptx(file_path: str) -> str:
-        prs = Presentation(file_path)
-        text = ""
-
-        for slide_idx, slide in enumerate(prs.slides, start=1):
-            slide_text = ""
-            image_idx = 0
-
-            for shape in slide.shapes:
-                if hasattr(shape, "text") and shape.text:
-                    slide_text += shape.text.strip() + "\n"
-
-                table_text = extract_ppt_table_text(shape)
-                if table_text:
-                    slide_text += f"\n【PPT第{slide_idx}页 表格】\n{table_text}"
-
-                if getattr(shape, "shape_type", None) == MSO_SHAPE_TYPE.PICTURE or hasattr(shape, "image"):
-                    image_idx += 1
-                    slide_text += extract_ppt_image_ocr(shape, slide_idx, image_idx)
-
-            notes_text = extract_ppt_notes(slide)
-            if notes_text:
-                slide_text += f"\n【PPT第{slide_idx}页 备注】\n{notes_text}\n"
-
-            if slide_text.strip():
-                text += f"\n【PPT第{slide_idx}页】\n{slide_text}\n"
-
-        return text
-
     def parse_file(file_path: str, file_name: str):
 
         ext = Path(file_name).suffix.lower()
@@ -1898,23 +1609,25 @@ def server(input: Inputs, output: Outputs, session: Session):
                 for para in doc.paragraphs:
                     text += para.text + "\n"
 
-                text += extract_docx_tables(doc)
-
             # PPT
             elif ext == ".pptx":
 
-                text += parse_pptx(file_path)
+                prs = Presentation(file_path)
+
+                for slide in prs.slides:
+
+                    for shape in slide.shapes:
+
+                        if hasattr(shape, "text"):
+
+                            if shape.text:
+                                text += shape.text + "\n"
 
             # 图片
             elif ext in [".png", ".jpg", ".jpeg"]:
 
                 text += f"【图片文件】{file_name}\n"
-                image_bytes = Path(file_path).read_bytes()
-                ocr_text, ocr_error = ocr_image_bytes(image_bytes)
-                if ocr_text:
-                    text += f"【图片OCR】\n{ocr_text}\n"
-                else:
-                    text += f"{ocr_error or '未识别到图片文字'}\n"
+                text += "当前版本暂未OCR识别\n"
 
             else:
 
@@ -1935,9 +1648,6 @@ def server(input: Inputs, output: Outputs, session: Session):
     def clear_agent_state():
         extracted_text_value.set("")
         ai_output_result_value.set("等待AI处理...")
-        chat_messages_value.set([])
-        chat_busy_value.set(False)
-        last_chat_question_value.set("")
         clear_version_value.set(clear_version_value() + 1)
         upload_cleared_value.set(True)
 
@@ -2223,8 +1933,7 @@ def server(input: Inputs, output: Outputs, session: Session):
             - 若项目本体无法公开验证，不要直接判定项目不存在；必须使用外围证据验证合作方、区域市场、基础设施、许可、消纳、财务指标的合理性
             - 对公开信息缺失进行分级：正常不可得 / 可疑不可得 / 高风险不可得 / 矛盾不可得
             - 必须根据项目评分模型输出分项评分和综合建议
-            - 评分必须区分“机会吸引力”和“信息充分度”；信息少不等于项目差，未知项按中性待核验处理
-            - 只有出现明确负面证据、明显逻辑矛盾、主体不存在、权属路径明显不可行时，才显著降低机会吸引力分
+            - 评分必须谨慎：证据不足时要扣分，并说明提分所需材料
             - 不要编造不存在的数据
             - 请保持专业投研风格
             """
@@ -2287,10 +1996,10 @@ def server(input: Inputs, output: Outputs, session: Session):
                 b. 至少包括：项目teaser、公司注册文件、股权结构简表、项目位置/坐标、土地/码头/牌照状态证明、基础CAPEX区间、产品和下游客户类型、政府沟通或批文状态、第三方顾问参与情况
                 c. 请输出“签NDA前必须追问的10个问题”
             9. 项目评分模型
-                a. 请按“NDA前项目初筛评分模型”输出Markdown评分表：评分维度、权重、机会吸引力得分、当前判断、信息状态、下一步需核验材料
-                b. 评分维度包括：资源/资产吸引力（15分）、权属与推进路径可行性（15分）、市场消纳与价格逻辑（15分）、基础设施匹配度（10分）、合作方初步匹配度（15分）、商业模式潜力（10分）、国家/政策/税务/外汇环境（10分）、与九丰业务协同（10分）
-                c. 输出机会吸引力总分（100分制）、信息充分度评级（高/中/低/极低）、评分置信度（高/中/低）、初筛建议：建议进入NDA / 补充非敏感材料后再NDA / 谨慎接触 / 暂缓或不建议
-                d. 必须说明最主要的3个机会点、3个红旗/疑点，以及信息缺口不等于负面结论的处理方式
+                a. 请按以下维度输出Markdown评分表：评分维度、权重、得分、主要依据、扣分原因、下一步提分所需材料
+                b. 评分维度包括：资源/资产确定性（15分）、权属与合规清晰度（15分）、市场消纳与价格机制（15分）、基础设施成熟度（10分）、合作方能力与信用（15分）、财务回报与商业模式（10分）、国家/政策/税务/外汇风险（10分）、与九丰业务协同（10分）
+                c. 输出综合得分（100分制）和初筛建议：建议推进 / 谨慎推进 / 暂缓推进 / 不建议推进
+                d. 必须说明总分最主要的3个加分项和3个扣分项
             10. 结论与建议下一步计划
 
             最后必须输出：
@@ -2308,8 +2017,8 @@ def server(input: Inputs, output: Outputs, session: Session):
             - 不要笼统写“很多数据搜索不到”，必须具体列出哪些字段缺证据
             - 对隐蔽项目，必须输出“项目本体未直接验证，但外围逻辑是否成立”的判断
             - 必须输出“NDA前追问清单”和“非敏感材料清单”
-            - 不要只给总分，必须给分项评分、当前判断、信息状态、下一步需核验材料
-            - 不得因为缺少公开信息就机械打低分；缺信息应进入“信息充分度评级”和“待核验材料”，只有明确负面证据才作为扣分项
+            - 不要只给总分，必须给分项评分、证据依据、扣分原因
+            - 若某评分项缺少A/B类来源支撑，原则上不得给满分或接近满分
             - 对每个待核实项说明建议下一步核验路径，例如索要文件、查监管官网、查年报、访谈合作方、聘请法律/税务/技术顾问
             - 凡引用外部资料，尽量在句末附来源名称或链接
             """
@@ -2356,103 +2065,6 @@ def server(input: Inputs, output: Outputs, session: Session):
                     f"❌ 错误：{str(e)}",
                     type="error"
                 )
-
-    @reactive.Effect
-    @reactive.event(input.ask_chat)
-    def answer_project_question():
-        if chat_busy_value():
-            ui.notification_show("上一条追问仍在处理中，请稍候。", type="warning")
-            return
-
-        with reactive.isolate():
-            api_key = input.api_key().strip()
-            question = (input.chat_question() or "").strip()
-            current_brief = brief_until_risk_section(
-                input_value("editor_text") or ai_output_result_value()
-            )
-            source_material = extracted_text_value()
-            history = chat_messages_value()
-
-        if not api_key:
-            ui.notification_show("请输入 DeepSeek API Key", type="error")
-            return
-
-        if not question:
-            ui.notification_show("请输入要追问的问题", type="warning")
-            return
-
-        if question == last_chat_question_value():
-            ui.notification_show("这条问题刚刚已经发送过了，请稍候或修改问题后再发。", type="warning")
-            return
-
-        chat_busy_value.set(True)
-        last_chat_question_value.set(question)
-        ui.update_action_button("ask_chat", label="发送中...")
-
-        user_message = {
-            "role": "user",
-            "content": question
-        }
-        chat_messages_value.set(history + [user_message])
-        ui.update_text_area("chat_question", value="")
-
-        history_for_prompt = "\n\n".join(
-            f"{'用户' if item.get('role') == 'user' else '助手'}：{item.get('content', '')}"
-            for item in history[-6:]
-        )
-
-        chat_prompt = f"""
-        # 当前项目简报内容（仅包含第六部分“风险识别”及以前）
-        {current_brief[:16000]}
-
-        # 用户上传材料提取文本
-        {source_material[:12000]}
-
-        # 最近对话
-        {history_for_prompt}
-
-        # 用户追问
-        {question}
-
-        请基于上传材料，以及当前简报中“风险识别”及以前的内容回答用户追问。
-
-        要求：
-        - 如果问题涉及事实判断，优先引用上传材料，以及简报第六部分“风险识别”及以前的已有信息。
-        - 不要依据简报中“外围证据验证、NDA前追问清单、项目评分模型、结论”等后续模块作答。
-        - 如果当前材料不足，请明确说“当前材料不足以判断”，并列出下一步需要核验的材料或搜索方向。
-        - 不要编造不存在的项目事实、数据、许可证、合作方背景。
-        - 回答应简洁、专业，适合海外油气/LNG/LPG项目前期判断。
-        """
-
-        try:
-            result = deepseek_chat_completion(
-                api_key=api_key,
-                model="deepseek-v4-pro",
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "你是广东九丰能源海外项目简报追问助手，专注NDA前初筛、外围证据、风险识别和材料追问。"
-                    },
-                    {
-                        "role": "user",
-                        "content": chat_prompt
-                    }
-                ],
-                temperature=0.2,
-                timeout=120,
-                retries=3
-            )
-            answer = result["choices"][0]["message"]["content"]
-        except Exception as e:
-            answer = f"追问回答失败：{str(e)}"
-
-        chat_messages_value.set(chat_messages_value() + [{
-            "role": "assistant",
-            "content": answer
-        }])
-
-        chat_busy_value.set(False)
-        ui.update_action_button("ask_chat", label="发送")
 
     # ======================================
     # 输出渲染
@@ -2520,35 +2132,6 @@ def server(input: Inputs, output: Outputs, session: Session):
             ui.tags.script("setTimeout(syncRichEditor, 0);"),
             class_="editor-shell"
         )
-
-    @output
-    @render.ui
-    def chat_history():
-        messages = chat_messages_value()
-
-        if not messages:
-            return ui.div(
-                ui.div(
-                    ui.div("助手", class_="chat-role"),
-                    ui.markdown("可以基于左侧简报继续追问，例如：\n\n- NDA前还应该问对方什么？\n- 这个项目最大的红旗是什么？\n- 合作方还需要怎么查？"),
-                    class_="chat-message assistant"
-                ),
-                class_="chat-history"
-            )
-
-        rendered = []
-        for item in messages:
-            role = item.get("role", "assistant")
-            content = item.get("content", "")
-            rendered.append(
-                ui.div(
-                    ui.div("用户" if role == "user" else "助手", class_="chat-role"),
-                    ui.markdown(escape(content)) if role == "user" else ui.markdown(content),
-                    class_=f"chat-message {role}"
-                )
-            )
-
-        return ui.div(*rendered, class_="chat-history")
 
     @output
     @render.ui
