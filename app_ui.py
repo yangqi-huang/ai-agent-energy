@@ -19,6 +19,11 @@ def build_ui():
                 "开始生成项目简报",
                 class_="btn-primary w-100",
             ),
+            ui.input_action_button(
+                "run_regional_intelligence",
+                "生成区域投资情报",
+                class_="btn-outline-primary w-100 mt-2",
+            ),
             ui.download_button(
                 "download_word",
                 "下载 Word 简报",
@@ -38,11 +43,19 @@ def build_ui():
             ui.tags.link(rel="stylesheet", href="styles.css"),
             ui.tags.script(src="app.js"),
         ),
-        ui.card(
-            ui.h4("AI 结构化输出"),
-            ui.output_ui("report_output"),
-            height="calc(100vh - 70px)",
-            full_screen=True,
+        ui.div(
+            ui.navset_card_tab(
+                ui.nav_panel(
+                    "AI 结构化输出",
+                    ui.output_ui("report_output"),
+                ),
+                ui.nav_panel(
+                    "区域资源与投资情报",
+                    ui.output_ui("regional_intelligence_output"),
+                ),
+                full_screen=True,
+            ),
+            class_="main-tab-shell",
         ),
         fillable=True,
     )
