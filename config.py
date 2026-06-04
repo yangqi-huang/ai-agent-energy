@@ -1,0 +1,20 @@
+DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
+
+FAST_MODEL = "deepseek-v4-flash"
+REPORT_MODEL = "deepseek-v4-pro"
+
+MAX_MATERIAL_CHARS = 50000
+MAX_SEARCH_QUERIES = 6
+SEARCH_RESULTS_PER_QUERY = 3
+SEARCH_PAGES_PER_QUERY = 1
+SEARCH_PAGE_TEXT_CHARS = 2500
+
+SUPPORTED_EXTENSIONS = [
+    ".ppt",
+    ".pptx",
+    ".pdf",
+    ".docx",
+    ".png",
+    ".jpg",
+    ".jpeg",
+]
