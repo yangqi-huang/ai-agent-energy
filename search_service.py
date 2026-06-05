@@ -65,6 +65,7 @@ def fetch_page(url: str) -> str:
 
 def run_search_plan(plan: list[dict]) -> str:
     blocks = []
+    source_number = 1
 
     with DDGS() as ddgs:
         for item in plan:
@@ -86,9 +87,11 @@ def run_search_plan(plan: list[dict]) -> str:
                 summary = result.get("body", "")[:700]
                 url = result.get("href", "")
                 page_text = fetch_page(url) if index <= SEARCH_PAGES_PER_QUERY else ""
+                source_id = f"S{source_number}"
+                source_number += 1
                 result_lines.append(
                     "\n".join([
-                        f"### 结果 {index}: {title}",
+                        f"### [{source_id}] 结果 {index}: {title}",
                         f"摘要：{summary}",
                         f"正文摘录：{page_text}",
                         f"链接：{url}",

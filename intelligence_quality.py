@@ -5,12 +5,12 @@ from intelligence_prompts import REQUIRED_INTELLIGENCE_SECTIONS
 
 REQUIRED_TABLE_HEADERS = {
     "一、项目类型与区域定位": ["定位要素", "判断", "项目类型", "价值链位置"],
-    "二、核心资源与原料条件": ["资源或原料事项", "区域公开信息", "与项目的关联", "初步影响"],
-    "三、价格与成本基准": ["价格或成本项目", "区域基准与单位", "数据日期及来源", "对项目经济性的影响"],
-    "四、基础设施与实施条件": ["基础设施或实施条件", "区域情况", "与项目的距离或连接关系", "对项目的影响"],
-    "五、市场消纳与竞争格局": ["市场事项", "区域情况", "竞争或消纳影响", "初步判断"],
-    "六、政策与投资环境": ["政策或投资事项", "公开信息", "对项目的影响", "需进一步关注"],
-    "八、数据来源": ["编号", "数据主题", "来源机构或网站", "发布或更新日期", "链接"],
+    "二、核心资源与原料条件": ["资源或原料事项", "外部新增事实（含来源编号）", "与项目的关联", "初步影响"],
+    "三、价格与成本基准": ["价格或成本项目", "外部价格或成本基准（含来源编号）", "数据日期", "对项目经济性的影响"],
+    "四、基础设施与实施条件": ["基础设施或实施条件", "外部新增事实（含来源编号）", "与项目的距离或连接关系", "对项目的影响"],
+    "五、市场消纳与竞争格局": ["市场事项", "外部新增事实（含来源编号）", "竞争或消纳影响", "初步判断"],
+    "六、政策与投资环境": ["政策或投资事项", "外部新增事实（含来源编号）", "对项目的影响", "需进一步关注"],
+    "八、数据来源": ["来源编号", "数据主题", "来源机构或网站", "发布或更新日期", "链接"],
 }
 
 
@@ -65,5 +65,23 @@ def validate_intelligence_structure(text: str) -> list[str]:
     for heading in ["有利条件", "主要约束", "区域投资情报结论"]:
         if not re.search(rf"^###\s+{heading}\s*$", conclusion, re.MULTILINE):
             issues.append(f"投资判断章节缺少三级标题：### {heading}")
+
+    evidence_sections = "\n".join(
+        _section_content(
+            text,
+            section,
+            REQUIRED_INTELLIGENCE_SECTIONS[index + 1],
+        )
+        for index, section in enumerate(REQUIRED_INTELLIGENCE_SECTIONS[1:6], start=1)
+    )
+    source_ids = set(re.findall(r"\[S\d+\]", evidence_sections))
+    if len(source_ids) < 5:
+        issues.append(f"第二至第六章节至少应引用5个不同外部来源，当前识别到{len(source_ids)}个")
+
+    sources_section = _section_content(text, "八、数据来源", None)
+    listed_source_ids = set(re.findall(r"\[S\d+\]", sources_section))
+    missing_sources = sorted(source_ids - listed_source_ids)
+    if missing_sources:
+        issues.append(f"数据来源表未列出正文引用的来源：{'、'.join(missing_sources)}")
 
     return issues

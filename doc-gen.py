@@ -4,7 +4,7 @@ from shiny import App, Inputs, Outputs, Session, reactive, render, ui
 
 from ai_service import chat_completion, response_text
 from app_ui import build_ui, upload_input
-from config import FAST_MODEL, MAX_SEARCH_QUERIES, REPORT_MODEL
+from config import FAST_MODEL, MAX_SEARCH_QUERIES, REGIONAL_MAX_SEARCH_QUERIES, REPORT_MODEL
 from file_parser import parse_uploaded_files
 from intelligence_prompts import (
     REGIONAL_INTELLIGENCE_SYSTEM_PROMPT,
@@ -183,7 +183,7 @@ def server(input: Inputs, output: Outputs, session: Session):
                     temperature=0.1,
                     timeout=90,
                 )
-                plan = parse_search_plan(response_text(plan_result))[:MAX_SEARCH_QUERIES]
+                plan = parse_search_plan(response_text(plan_result))[:REGIONAL_MAX_SEARCH_QUERIES]
 
                 progress.set(55, message="正在搜索区域资源、成本与投资数据...")
                 search_context = run_search_plan(plan)
