@@ -1,14 +1,34 @@
+import hashlib
 import shutil
 import subprocess
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from pathlib import Path
+from zipfile import ZipFile
 
 from PIL import Image, ImageEnhance, ImageOps
 from PyPDF2 import PdfReader
 from docx import Document
 from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE
+
+from config import (
+    OCR_MAX_IMAGES_PER_PAGE,
+    OCR_MAX_IMAGES_PER_FILE,
+    OCR_MIN_IMAGE_PIXELS,
+    OCR_SPARSE_PAGE_CHARS,
+    OCR_WORKERS,
+)
+
+
+def _is_substantial_image(image_bytes: bytes) -> bool:
+    try:
+        with Image.open(BytesIO(image_bytes)) as image:
+            width, height = image.size
+        return width * height >= OCR_MIN_IMAGE_PIXELS and min(width, height) >= 180
+    except Exception:
+        return False
 
 
 def _preprocess_image(image_bytes: bytes) -> BytesIO:
@@ -45,7 +65,17 @@ def ocr_image(image_bytes: bytes, lang: str = "chi_sim+eng") -> tuple[str, str |
             Image.open(processed),
             lang=lang,
             config="--psm 6",
+            timeout=45,
         )
+        if len(text.strip()) < 20:
+            retry_text = pytesseract.image_to_string(
+                Image.open(processed),
+                lang=lang,
+                config="--psm 11",
+                timeout=45,
+            )
+            if len(retry_text.strip()) > len(text.strip()):
+                text = retry_text
         return text.strip(), None
     except Exception as python_error:
         command = shutil.which("tesseract")
@@ -68,13 +98,61 @@ def ocr_image(image_bytes: bytes, lang: str = "chi_sim+eng") -> tuple[str, str |
                 return "", f"OCR失败：{python_error}；{cli_error}"
 
 
+def _ocr_unique_images(
+    images: list[bytes],
+    max_images: int = OCR_MAX_IMAGES_PER_PAGE,
+) -> list[tuple[str, str | None]]:
+    selected = []
+    seen = set()
+
+    for image_bytes in images:
+        digest = hashlib.sha1(image_bytes).hexdigest()
+        if digest in seen or not _is_substantial_image(image_bytes):
+            continue
+        seen.add(digest)
+        selected.append(image_bytes)
+        if len(selected) >= max_images:
+            break
+
+    if not selected:
+        return []
+
+    with ThreadPoolExecutor(max_workers=OCR_WORKERS) as executor:
+        return list(executor.map(ocr_image, selected))
+
+
 def _parse_pdf(file_path: str) -> str:
     text = []
+    ocr_image_count = 0
     reader = PdfReader(file_path)
     for index, page in enumerate(reader.pages, start=1):
-        page_text = page.extract_text()
-        if page_text:
-            text.append(f"【PDF第{index}页】\n{page_text}")
+        page_text = (page.extract_text() or "").strip()
+        page_parts = [page_text] if page_text else []
+
+        if (
+            len(page_text) < OCR_SPARSE_PAGE_CHARS
+            and ocr_image_count < OCR_MAX_IMAGES_PER_FILE
+        ):
+            try:
+                image_bytes = [image.data for image in page.images]
+            except Exception:
+                image_bytes = []
+            results = _ocr_unique_images(
+                image_bytes,
+                min(
+                    OCR_MAX_IMAGES_PER_PAGE,
+                    OCR_MAX_IMAGES_PER_FILE - ocr_image_count,
+                ),
+            )
+            ocr_image_count += len(results)
+            for image_index, (recognized, error) in enumerate(results, start=1):
+                if recognized:
+                    page_parts.append(f"【页面图片{image_index} OCR】\n{recognized}")
+                elif error:
+                    page_parts.append(f"【页面图片{image_index}】{error}")
+
+        if page_parts:
+            text.append(f"【PDF第{index}页】\n" + "\n\n".join(page_parts))
     return "\n\n".join(text)
 
 
@@ -91,16 +169,35 @@ def _parse_docx(file_path: str) -> str:
         if rows:
             text.append(f"【Word表格 {index}】\n" + "\n".join(rows))
 
+    try:
+        with ZipFile(file_path) as archive:
+            images = [
+                archive.read(name)
+                for name in archive.namelist()
+                if name.startswith("word/media/")
+            ]
+        for image_index, (recognized, error) in enumerate(
+            _ocr_unique_images(images),
+            start=1,
+        ):
+            if recognized:
+                text.append(f"【Word图片{image_index} OCR】\n{recognized}")
+            elif error:
+                text.append(f"【Word图片{image_index}】{error}")
+    except Exception:
+        pass
+
     return "\n\n".join(text)
 
 
 def _parse_pptx(file_path: str) -> str:
     presentation = Presentation(file_path)
     output = []
+    ocr_image_count = 0
 
     for slide_index, slide in enumerate(presentation.slides, start=1):
         slide_parts = []
-        image_index = 0
+        slide_images = []
 
         for shape in slide.shapes:
             if hasattr(shape, "text") and shape.text:
@@ -116,12 +213,24 @@ def _parse_pptx(file_path: str) -> str:
                     slide_parts.append("【表格】\n" + "\n".join(rows))
 
             if getattr(shape, "shape_type", None) == MSO_SHAPE_TYPE.PICTURE:
-                image_index += 1
-                recognized, error = ocr_image(shape.image.blob)
-                if recognized:
-                    slide_parts.append(f"【图片{image_index} OCR】\n{recognized}")
-                elif error:
-                    slide_parts.append(f"【图片{image_index}】{error}")
+                slide_images.append(shape.image.blob)
+
+        results = []
+        if ocr_image_count < OCR_MAX_IMAGES_PER_FILE:
+            results = _ocr_unique_images(
+                slide_images,
+                min(
+                    OCR_MAX_IMAGES_PER_PAGE,
+                    OCR_MAX_IMAGES_PER_FILE - ocr_image_count,
+                ),
+            )
+            ocr_image_count += len(results)
+
+        for image_index, (recognized, error) in enumerate(results, start=1):
+            if recognized:
+                slide_parts.append(f"【图片{image_index} OCR】\n{recognized}")
+            elif error:
+                slide_parts.append(f"【图片{image_index}】{error}")
 
         try:
             notes = slide.notes_slide.notes_text_frame.text.strip()
