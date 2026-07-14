@@ -1,4 +1,5 @@
 from pathlib import Path
+from datetime import datetime
 
 from shiny import App, Inputs, Outputs, Session, reactive, render, ui
 
@@ -111,7 +112,7 @@ def server(input: Inputs, output: Outputs, session: Session):
                     timeout=180,
                 )
                 report_text = response_text(report_result)
-                structure_issues = validate_report_structure(report_text)
+                structure_issues = validate_report_structure(report_text, parsed_material)
 
                 if structure_issues:
                     progress.set(90, message="正在校正简报结构...")
@@ -132,7 +133,7 @@ def server(input: Inputs, output: Outputs, session: Session):
                         timeout=180,
                     )
                     repaired_text = response_text(repair_result)
-                    repaired_issues = validate_report_structure(repaired_text)
+                    repaired_issues = validate_report_structure(repaired_text, parsed_material)
                     if len(repaired_issues) < len(structure_issues):
                         report_text = repaired_text
 
@@ -302,6 +303,16 @@ def server(input: Inputs, output: Outputs, session: Session):
         if not content:
             content = "# 项目简报\n\n暂无内容，请先生成项目简报。"
         yield html_to_docx_bytes(markdown_to_html(content))
+
+    @output
+    @render.download(
+        filename=lambda: f"解析文本_{datetime.now().strftime('%Y%m%d_%H%M')}.txt"
+    )
+    def download_parsed_text():
+        content = material_text()
+        if not content:
+            content = "暂无解析文本。请先上传材料并生成项目简报或区域投资情报。"
+        yield content
 
 
 app = App(

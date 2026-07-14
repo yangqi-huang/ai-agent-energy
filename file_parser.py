@@ -1,4 +1,5 @@
 import hashlib
+import re
 import shutil
 import subprocess
 import tempfile
@@ -8,7 +9,7 @@ from pathlib import Path
 from zipfile import ZipFile
 
 from PIL import Image, ImageEnhance, ImageOps
-from PyPDF2 import PdfReader
+from PyPDF2 import PdfReader, PdfWriter
 from docx import Document
 from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE
@@ -16,10 +17,13 @@ from pptx.enum.shapes import MSO_SHAPE_TYPE
 from config import (
     OCR_MAX_IMAGES_PER_PAGE,
     OCR_MAX_IMAGES_PER_FILE,
+    OCR_MAX_RENDERED_PDF_PAGES,
     OCR_MIN_IMAGE_PIXELS,
+    OCR_RENDERED_PDF_PAGE_SIZE,
     OCR_SPARSE_PAGE_CHARS,
     OCR_WORKERS,
 )
+from material_metrics import extract_key_information_context
 
 
 def _is_substantial_image(image_bytes: bytes) -> bool:
@@ -52,6 +56,59 @@ def _preprocess_image(image_bytes: bytes) -> BytesIO:
     return output
 
 
+def _ocr_quality_score(text: str) -> int:
+    if not text:
+        return 0
+    useful_chars = re.findall(r"[\w\u4e00-\u9fff%$€£¥./,-]", text)
+    digits = re.findall(r"\d", text)
+    key_terms = re.findall(
+        r"IRR|NPV|CAPEX|OPEX|EBITDA|Reserve|Area|储量|面积|投资|回收期|产能|万吨|合作",
+        text,
+        re.IGNORECASE,
+    )
+    replacement_noise = text.count("�") + text.count("?")
+    return len(useful_chars) + len(digits) * 2 + len(key_terms) * 12 - replacement_noise * 5
+
+
+def _best_ocr_result(results: list[str]) -> str:
+    return max(results, key=_ocr_quality_score, default="")
+
+
+LOW_VALUE_TEXT_PATTERNS = [
+    r"strictly\s+confiden\s*tial",
+    r"may\s+not\s+be\s+distribut",
+    r"prior\s+writt\s*en\s+consen\s*t",
+    r"this\s+documen\s*t",
+]
+
+
+def _is_low_value_pdf_text(page_text: str) -> bool:
+    normalized = re.sub(r"\s+", " ", page_text).strip().lower()
+    if not normalized:
+        return True
+
+    matches = sum(
+        1
+        for pattern in LOW_VALUE_TEXT_PATTERNS
+        if re.search(pattern, normalized, re.IGNORECASE)
+    )
+    words = re.findall(r"[a-zA-Z\u4e00-\u9fff]{3,}", normalized)
+    numbers = re.findall(r"\d", normalized)
+    useful_terms = re.findall(
+        r"palas|prospek|blok|migas|minarak|brantas|cadangan|sumber|daya|luas|"
+        r"reserv|resource|area|prospect|exploration|gas|oil|irr|npv|invest|"
+        r"produksi|production|psc|working\s+interest|operator",
+        normalized,
+        re.IGNORECASE,
+    )
+
+    if matches >= 2 and len(useful_terms) <= 2 and len(numbers) <= 2:
+        return True
+    if len(words) <= 12 and not useful_terms:
+        return True
+    return False
+
+
 def ocr_image(image_bytes: bytes, lang: str = "chi_sim+eng") -> tuple[str, str | None]:
     try:
         processed = _preprocess_image(image_bytes)
@@ -61,22 +118,17 @@ def ocr_image(image_bytes: bytes, lang: str = "chi_sim+eng") -> tuple[str, str |
     try:
         import pytesseract
 
-        text = pytesseract.image_to_string(
-            Image.open(processed),
-            lang=lang,
-            config="--psm 6",
-            timeout=45,
-        )
-        if len(text.strip()) < 20:
-            retry_text = pytesseract.image_to_string(
+        results = []
+        for config in ["--psm 6", "--psm 11"]:
+            text = pytesseract.image_to_string(
                 Image.open(processed),
                 lang=lang,
-                config="--psm 11",
+                config=config,
                 timeout=45,
             )
-            if len(retry_text.strip()) > len(text.strip()):
-                text = retry_text
-        return text.strip(), None
+            if text.strip():
+                results.append(text.strip())
+        return _best_ocr_result(results).strip(), None
     except Exception as python_error:
         command = shutil.which("tesseract")
         if not command:
@@ -121,38 +173,149 @@ def _ocr_unique_images(
         return list(executor.map(ocr_image, selected))
 
 
+def _render_pdf_page_with_pymupdf(file_path: str, page_index: int) -> bytes | None:
+    try:
+        import fitz
+    except Exception:
+        return None
+
+    try:
+        document = fitz.open(file_path)
+        page = document.load_page(page_index)
+        pixmap = page.get_pixmap(matrix=fitz.Matrix(2.4, 2.4), alpha=False)
+        image = pixmap.tobytes("png")
+        document.close()
+        return image
+    except Exception:
+        return None
+
+
+def _render_pdf_page_with_quicklook(
+    reader: PdfReader,
+    page_index: int,
+    temp_dir: str,
+) -> bytes | None:
+    command = shutil.which("qlmanage")
+    if not command:
+        return None
+
+    page_pdf = Path(temp_dir) / f"page_{page_index + 1}.pdf"
+    output_dir = Path(temp_dir) / "preview"
+    output_dir.mkdir(exist_ok=True)
+
+    writer = PdfWriter()
+    writer.add_page(reader.pages[page_index])
+    with page_pdf.open("wb") as handle:
+        writer.write(handle)
+
+    try:
+        subprocess.run(
+            [
+                command,
+                "-t",
+                "-s",
+                str(OCR_RENDERED_PDF_PAGE_SIZE),
+                "-o",
+                str(output_dir),
+                str(page_pdf),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except Exception:
+        return None
+
+    candidates = sorted(output_dir.glob(f"{page_pdf.name}*.png"))
+    if not candidates:
+        candidates = sorted(
+            output_dir.glob("*.png"),
+            key=lambda item: item.stat().st_mtime,
+        )
+    if not candidates:
+        return None
+    return candidates[-1].read_bytes()
+
+
+def _render_pdf_page_to_image(
+    file_path: str,
+    reader: PdfReader,
+    page_index: int,
+    temp_dir: str,
+) -> bytes | None:
+    rendered = _render_pdf_page_with_pymupdf(file_path, page_index)
+    if rendered:
+        return rendered
+    return _render_pdf_page_with_quicklook(reader, page_index, temp_dir)
+
+
 def _parse_pdf(file_path: str) -> str:
     text = []
     ocr_image_count = 0
+    rendered_page_count = 0
     reader = PdfReader(file_path)
-    for index, page in enumerate(reader.pages, start=1):
-        page_text = (page.extract_text() or "").strip()
-        page_parts = [page_text] if page_text else []
-
-        if (
-            len(page_text) < OCR_SPARSE_PAGE_CHARS
-            and ocr_image_count < OCR_MAX_IMAGES_PER_FILE
-        ):
-            try:
-                image_bytes = [image.data for image in page.images]
-            except Exception:
-                image_bytes = []
-            results = _ocr_unique_images(
-                image_bytes,
-                min(
-                    OCR_MAX_IMAGES_PER_PAGE,
-                    OCR_MAX_IMAGES_PER_FILE - ocr_image_count,
-                ),
+    with tempfile.TemporaryDirectory() as temp_dir:
+        for index, page in enumerate(reader.pages, start=1):
+            page_text = (page.extract_text() or "").strip()
+            page_parts = [page_text] if page_text else []
+            needs_ocr = (
+                len(page_text) < OCR_SPARSE_PAGE_CHARS
+                or _is_low_value_pdf_text(page_text)
             )
-            ocr_image_count += len(results)
-            for image_index, (recognized, error) in enumerate(results, start=1):
-                if recognized:
-                    page_parts.append(f"【页面图片{image_index} OCR】\n{recognized}")
-                elif error:
-                    page_parts.append(f"【页面图片{image_index}】{error}")
 
-        if page_parts:
-            text.append(f"【PDF第{index}页】\n" + "\n\n".join(page_parts))
+            should_render_page = (
+                needs_ocr
+                and rendered_page_count < OCR_MAX_RENDERED_PDF_PAGES
+                and ocr_image_count < OCR_MAX_IMAGES_PER_FILE
+            )
+            rendered_ocr_ok = False
+            if should_render_page:
+                rendered = _render_pdf_page_to_image(file_path, reader, index - 1, temp_dir)
+                if rendered:
+                    rendered_page_count += 1
+                    ocr_image_count += 1
+                    recognized, error = ocr_image(rendered)
+                    if recognized:
+                        rendered_ocr_ok = True
+                        page_parts.append(f"【整页渲染OCR】\n{recognized}")
+                    elif error:
+                        page_parts.append(f"【整页渲染OCR】{error}")
+
+            if (
+                needs_ocr
+                and not rendered_ocr_ok
+                and ocr_image_count < OCR_MAX_IMAGES_PER_FILE
+            ):
+                try:
+                    image_bytes = [image.data for image in page.images]
+                except Exception:
+                    image_bytes = []
+                results = _ocr_unique_images(
+                    image_bytes,
+                    min(
+                        OCR_MAX_IMAGES_PER_PAGE,
+                        OCR_MAX_IMAGES_PER_FILE - ocr_image_count,
+                    ),
+                )
+                ocr_image_count += len(results)
+                for image_index, (recognized, error) in enumerate(results, start=1):
+                    if recognized:
+                        page_parts.append(f"【页面图片{image_index} OCR】\n{recognized}")
+                    elif error:
+                        page_parts.append(f"【页面图片{image_index}】{error}")
+
+            if needs_ocr and len("\n".join(page_parts).strip()) < OCR_SPARSE_PAGE_CHARS:
+                page_parts.append("【OCR提示】本页原生文本较少，整页渲染或图片OCR未提取到足够文字。")
+
+            if page_parts:
+                text.append(f"【PDF第{index}页】\n" + "\n\n".join(page_parts))
+
+        if rendered_page_count >= OCR_MAX_RENDERED_PDF_PAGES:
+            text.append(
+                f"【提示】PDF整页OCR已达到上限 {OCR_MAX_RENDERED_PDF_PAGES} 页，"
+                "后续页面保留可提取文本。"
+            )
     return "\n\n".join(text)
 
 
@@ -275,4 +438,8 @@ def parse_uploaded_files(files: list[dict]) -> str:
         name = file_info["name"]
         content = parse_file(file_info["datapath"], name)
         blocks.append(f"=== 文件名：{name} ===\n\n{content}")
-    return "\n\n" + ("\n\n" + "=" * 50 + "\n\n").join(blocks)
+    combined = "\n\n" + ("\n\n" + "=" * 50 + "\n\n").join(blocks)
+    key_context = extract_key_information_context(combined)
+    if key_context:
+        return "\n\n".join([key_context, combined])
+    return combined

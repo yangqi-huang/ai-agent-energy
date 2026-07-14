@@ -29,6 +29,11 @@ def build_ui():
                 "下载 Word 简报",
                 class_="btn-success w-100 mt-2",
             ),
+            ui.download_button(
+                "download_parsed_text",
+                "下载解析文本",
+                class_="btn-outline-secondary w-100 mt-2",
+            ),
             ui.input_action_button(
                 "clear_agent",
                 "清空",
