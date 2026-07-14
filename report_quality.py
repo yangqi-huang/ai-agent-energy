@@ -127,7 +127,7 @@ def validate_report_structure(report_text: str, material_text: str = "") -> list
         required_market_headers = [
             "需求点/企业名称",
             "所属产业或用能场景",
-            "与项目设施或气田的距离及方位",
+            "大致方位及距离远近",
             "可能需求规模",
             "需求依据",
             "对项目消纳的意义",
@@ -157,6 +157,7 @@ def validate_report_structure(report_text: str, material_text: str = "") -> list
         }
         named_rows = 0
         generic_rows = 0
+        distance_placeholder_rows = 0
         for line in market.splitlines():
             stripped = line.strip()
             if not stripped.startswith("|") or "---" in stripped or "需求点/企业名称" in stripped:
@@ -175,8 +176,12 @@ def validate_report_structure(report_text: str, material_text: str = "") -> list
                 generic_rows += 1
             else:
                 named_rows += 1
+            if len(cells) >= 3 and "待测算" in cells[2]:
+                distance_placeholder_rows += 1
         if named_rows == 0:
             issues.append("市场与消纳必须至少列出1个可点名的具体需求点，不能只列化肥厂/电厂/工业园等类型词或待核实类型")
+        if distance_placeholder_rows:
+            issues.append("市场与消纳的方位及远近字段不应写“待测算”；应使用“项目所在地周边/同区域较近/跨区域较远/需结合道路、管线或航运条件复核”等初筛表达")
 
     questions_match = re.search(
         r"^##\s+八、项目推进问题清单\s*$([\s\S]*)$",
